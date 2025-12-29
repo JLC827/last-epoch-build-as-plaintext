@@ -13,3 +13,5 @@ Use https://www.lastepochtools.com/planner/AL0aE1k4 as a test url for generating
 
 Coding requirements:
 fail quick, fail fast. KISS principle. 
+You work with text files, so saving of files to allow you to parse output is encouraged, such as to help debug HTML content or test that data is being retrieved correctly.
+Be aware of rate limiting and implement delays or retries as needed to avoid being blocked by the target website, if needed. Watch out for cloudlflare blocks.
