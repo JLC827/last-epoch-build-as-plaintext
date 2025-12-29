@@ -77,3 +77,56 @@ fn main() {
 *   **No Code Duplication:** Logic lives in `lib.rs` and is imported by all binaries.
 *   **Isolation:** Sub-systems in `src/bin/` can be tested or debugged without running the full application.
 *   **Idiomatic:** This is the standard Rust approach for multi-binary projects.
+
+
+
+## How the Code Works
+The project uses the `headless_chrome` crate to automate a browser instance.
+1.  **Initialization**: Launches a headless Chrome browser with specific flags to avoid detection and handle the environment.
+2.  **Navigation**: Navigates to the target Build Planner URL (e.g., `https://www.lastepochtools.com/planner/AL0aE1k4`).
+3.  **Rendering**: Waits for the page to load and sleeps for a few seconds to ensure the React application has fully rendered and hydrated the state.
+4.  **Data Extraction**:
+    *   **Global Objects**: Injects JavaScript to serialize and extract global window objects like `window.le_`, `window.LEAbilities`, `window.coreDB`, `window.itemDB`, and `window.buildInfo`.
+    *   **Translations**: Performs an in-page `fetch()` call to retrieve the full translation dataset (`/data/version135/i18n/full/en.json`) which contains mappings for Item Names, Affixes, and other IDs. This bypasses direct HTTP request blocks by using the browser's authenticated session context.
+5.  **Output**:
+    *   Saves raw JSON dumps for debugging and reference (`translations.json`, `le_dump.json`, etc.).
+    *   Parses `window.buildInfo` to generate a human-readable report (`build_data.txt`) containing stats, skills, and equipment.
+
+## What We Scrape
+The scraper extracts two categories of data:
+
+### 1. Raw Data Files (JSON)
+*   **`translations.json`**: The "Rosetta Stone" of the app. Contains the `full` namespace with mappings for Item Names, Affix Names, UI strings, etc.
+*   **`le_dump.json`**: A dump of `window.le_`, containing internal application state.
+*   **`le_abilities.json`**: Definitions for skills and abilities (`window.LEAbilities`).
+*   **`core_db.json`**: Core game database data (`window.coreDB`).
+*   **`item_db.json`**: Item database data (`window.itemDB`).
+
+### 2. Processed Build Report (`build_data.txt`)
+*   **Character Stats**: Level, Class, Attributes (Str, Dex, Int, Vit), Resistances, Defences, and General stats (HP, Mana).
+*   **Skills**: Active skills on the HUD and configured Skill Tree IDs.
+*   **Equipment**: For each slot (Helm, Body, etc.):
+    *   Item ID
+    *   Affixes (ID, Tier, Roll range)
+
+## How to Run It
+
+### Prerequisites
+*   Rust and Cargo installed.
+*   Windows 11 (PowerShell).
+
+### Commands
+1.  **Run the Main Scraper**:
+    ```powershell
+    # Run with default URL (https://www.lastepochtools.com/planner/AL0aE1k4)
+    cargo run
+
+    # Run with custom URL and output file
+    cargo run -- --url "https://www.lastepochtools.com/planner/AnotherBuild" --output "my_build.txt"
+    ```
+
+2.  **Run the JSON Inspector**:
+    This tool analyzes the structure of the downloaded `translations.json` file.
+    ```powershell
+    cargo run --bin inspect_json
+    ```
