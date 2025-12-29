@@ -47,55 +47,79 @@ fn main() -> Result<()> {
     // Give React some time to render the dynamic content
     std::thread::sleep(Duration::from_secs(5));
 
-    println!("Page loaded. Extracting data...");
+    println!("Page loaded. Starting extraction...");
 
-    // Probe 8: Fetch language files
-    let probe8_script = r#"
+    // 1. Extract Translations
+    println!("Extracting translations...");
+    let translation_script = r#"
         (async () => {
-            let result = {};
-            try {
-                let siteMarker = window['langSiteCacheMarker'] || '96';
-                let url = '/static_data/i18n/en.json?' + siteMarker;
-                result.url = url;
-                
-                let resp = await fetch(url);
-                if (resp.ok) {
-                    result.en_json = await resp.json();
-                    result.status = "success";
-                } else {
-                    result.status = "failed";
-                    result.http_code = resp.status;
-                    
-                    // Try fallback
-                    let fallbackUrl = '/data/i18n_fallback/en.json';
-                    let resp2 = await fetch(fallbackUrl);
-                    if (resp2.ok) {
-                        result.en_json = await resp2.json();
-                        result.status = "success_fallback";
-                    } else {
-                        result.fallback_status = resp2.status;
+            const version = 'version135';
+            const categories = ['Item_Names', 'Item_Affixes', 'Skills', 'Passives'];
+            const results = {};
+            
+            for (const cat of categories) {
+                try {
+                    const resp = await fetch(`/data/${version}/i18n/${cat}/en.json`);
+                    if (resp.ok) {
+                        results[cat] = await resp.json();
                     }
+                } catch (e) {
+                    results[cat] = { error: e.toString() };
                 }
-            } catch (e) {
-                result.status = "error";
-                result.error = e.toString();
             }
-            return JSON.stringify(result);
+            
+            // Static translations
+            try {
+                const resp = await fetch('/static_data/i18n/en.json');
+                if (resp.ok) {
+                    results['static'] = await resp.json();
+                }
+            } catch (e) {}
+
+            return JSON.stringify(results);
         })()
     "#;
-
-    println!("Running Probe 8 (Language Fetch)...");
-    let probe8_result = tab.evaluate(probe8_script, true)?;
-    if let Some(val) = probe8_result.value {
+    
+    let trans_res = tab.evaluate(translation_script, true)?;
+    if let Some(val) = trans_res.value {
         if let Some(s) = val.as_str() {
-             let mut file = File::create("probe8_result.json")?;
-             file.write_all(s.as_bytes())?;
-             println!("Probe 8 result written to probe8_result.json");
-        } else {
-            println!("Probe 8 returned non-string: {:?}", val);
+            let mut file = File::create("translations.json")?;
+            file.write_all(s.as_bytes())?;
+            println!("Saved translations.json");
         }
-    } else {
-        println!("Probe 8 returned no value");
+    }
+
+    // 2. Extract LEAbilities
+    println!("Extracting LEAbilities...");
+    let abilities_res = tab.evaluate("JSON.stringify(window.LEAbilities || {})", false)?;
+    if let Some(val) = abilities_res.value {
+        if let Some(s) = val.as_str() {
+            let mut file = File::create("le_abilities.json")?;
+            file.write_all(s.as_bytes())?;
+            println!("Saved le_abilities.json");
+        }
+    }
+
+    // 3. Extract coreDB
+    println!("Extracting coreDB...");
+    let coredb_res = tab.evaluate("JSON.stringify(window.coreDB || {})", false)?;
+    if let Some(val) = coredb_res.value {
+        if let Some(s) = val.as_str() {
+            let mut file = File::create("core_db.json")?;
+            file.write_all(s.as_bytes())?;
+            println!("Saved core_db.json");
+        }
+    }
+
+    // 4. Extract itemDB
+    println!("Extracting itemDB...");
+    let itemdb_res = tab.evaluate("JSON.stringify(window.itemDB || {})", false)?;
+    if let Some(val) = itemdb_res.value {
+        if let Some(s) = val.as_str() {
+            let mut file = File::create("item_db.json")?;
+            file.write_all(s.as_bytes())?;
+            println!("Saved item_db.json");
+        }
     }
 
     let build_info = extract_build_info(&tab)?;

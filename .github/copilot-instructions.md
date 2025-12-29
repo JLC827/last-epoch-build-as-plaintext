@@ -22,3 +22,58 @@ You can use curl to fetch JS files if needed to help parse out data.
 e.g. "curl -o hashed_js/planner_d0feed.js https://www.lastepochtools.com/data/version135/planner/js/d0feedd12833161e6575dc3d36021eab.js;"
 
 Don't delete main.rs. Make changes as needed instead or add new files.
+
+### Rust Architecture: Library + Binaries Pattern
+
+To ensure code reusability across the main application and standalone sub-system scripts, follow this structure:
+
+#### 1. Directory Structure
+```text
+├── Cargo.toml
+├── src/
+│   ├── lib.rs            # Main library (shared logic)
+│   ├── main.rs           # Primary application entry point
+│   ├── sub_logic/        # Feature-specific modules
+│   │   └── mod.rs
+│   └── bin/              # Standalone executable scripts
+│       └── sub_system.rs # Runs specific sub-system logic
+```
+
+#### 2. Setup Logic (`src/lib.rs`)
+Expose your modules so both `main.rs` and `bin/` files can access them:
+```rust
+// src/lib.rs
+pub mod sub_logic; 
+```
+
+#### 3. Main Application (`src/main.rs`)
+```rust
+// src/main.rs
+use your_project_name::sub_logic;
+
+fn main() {
+    sub_logic::run(); // Call shared logic
+}
+```
+
+#### 4. Standalone Sub-system (`src/bin/sub_system.rs`)
+Every file in `src/bin/` is a separate executable.
+```rust
+// src/bin/sub_system.rs
+use your_project_name::sub_logic;
+
+fn main() {
+    println!("Running standalone sub-system...");
+    sub_logic::run(); 
+}
+```
+
+#### 5. Commands
+*   **Run Main App:** `cargo run`
+*   **Run Sub-system:** `cargo run --bin sub_system`
+*   **Test Sub-system:** Create files in `/tests` for integration testing.
+
+#### Why this pattern?
+*   **No Code Duplication:** Logic lives in `lib.rs` and is imported by all binaries.
+*   **Isolation:** Sub-systems in `src/bin/` can be tested or debugged without running the full application.
+*   **Idiomatic:** This is the standard Rust approach for multi-binary projects.
