@@ -152,6 +152,12 @@ pub fn run() -> Result<()> {
     }
 
     let build_info = extract_build_info(&tab)?;
+    
+    // Save build_info.json for debugging
+    let mut file = File::create("build_info.json")?;
+    file.write_all(build_info.as_bytes())?;
+    println!("Saved build_info.json");
+
     let build_json: Value = serde_json::from_str(&build_info)?;
 
     // Initialize Resolver
@@ -166,6 +172,7 @@ pub fn run() -> Result<()> {
     
     writeln!(file, "\n--- Skills & Passives ---")?;
     write_skills(&mut file, &build_json, &resolver)?;
+    write_passives(&mut file, &build_json, &resolver)?;
     
     writeln!(file, "\n--- Equipment ---")?;
     write_equipment(&mut file, &build_json, &resolver)?;
@@ -271,6 +278,13 @@ fn write_skills(file: &mut File, json: &Value, resolver: &Resolver) -> Result<()
                 if let Some(id) = tree.get("treeID").and_then(|v| v.as_str()) {
                     let name = resolver.get_skill_name(id);
                     writeln!(file, "  - {} (ID: {})", name, id)?;
+                    
+                    if let Some(selected) = tree.get("selected").and_then(|s| s.as_object()) {
+                        for (node_id, points) in selected {
+                            let node_name = resolver.get_skill_node_name(id, node_id);
+                            writeln!(file, "    - {} (Points: {})", node_name, points)?;
+                        }
+                    }
                 }
             }
         }
@@ -280,12 +294,32 @@ fn write_skills(file: &mut File, json: &Value, resolver: &Resolver) -> Result<()
     Ok(())
 }
 
+fn write_passives(file: &mut File, json: &Value, resolver: &Resolver) -> Result<()> {
+    let class_id = json.get("characterClassId").and_then(|v| v.as_u64()).unwrap_or(255) as u8;
+    
+    if let Some(char_tree) = json.get("data").and_then(|d| d.get("charTree")) {
+        writeln!(file, "\nPassive Tree:")?;
+        if let Some(selected) = char_tree.get("selected").and_then(|s| s.as_object()) {
+            for (node_id_str, points) in selected {
+                if let Ok(node_id) = node_id_str.parse::<u8>() {
+                    let name = resolver.get_passive_name(class_id, node_id);
+                    writeln!(file, "  - {} (Points: {})", name, points)?;
+                } else {
+                     writeln!(file, "  - Node {} (Points: {})", node_id_str, points)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn write_equipment(file: &mut File, json: &Value, resolver: &Resolver) -> Result<()> {
     if let Some(equipment) = json.get("data").and_then(|d| d.get("equipment").and_then(|e| e.as_object())) {
         for (slot, item) in equipment {
             writeln!(file, "Slot: {}", slot)?;
-            if let Some(id) = item.get("id") {
-                writeln!(file, "  Item ID: {}", id)?;
+            if let Some(id) = item.get("id").and_then(|v| v.as_str()) {
+                let item_name = resolver.get_item_name(id);
+                writeln!(file, "  Item: {} (ID: {})", item_name, id)?;
             }
             if let Some(affixes) = item.get("affixes").and_then(|a| a.as_array()) {
                 writeln!(file, "  Affixes:")?;

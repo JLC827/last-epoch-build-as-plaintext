@@ -8,6 +8,7 @@ pub struct Resolver {
     translations: HashMap<String, String>,
     affix_map: HashMap<String, AffixData>,
     ability_map: HashMap<String, AbilityData>,
+    item_map: HashMap<String, String>,
 }
 
 struct AffixData {
@@ -26,10 +27,12 @@ impl Resolver {
             translations: HashMap::new(),
             affix_map: HashMap::new(),
             ability_map: HashMap::new(),
+            item_map: HashMap::new(),
         };
 
         resolver.load_translations("translations.json")?;
         resolver.load_affixes("item_db.json")?;
+        resolver.load_items("item_db.json")?;
         resolver.load_abilities("le_abilities.json")?;
 
         Ok(resolver)
@@ -53,6 +56,33 @@ impl Resolver {
                 for (k, v) in obj {
                     if let Some(s) = v.as_str() {
                         self.translations.insert(k.clone(), s.to_string());
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn load_items(&mut self, path: &str) -> Result<()> {
+        if let Ok(file) = File::open(path) {
+            let reader = BufReader::new(file);
+            let json: Value = serde_json::from_reader(reader)?;
+            
+            if let Some(item_list) = json.get("itemList").and_then(|v| v.as_object()) {
+                let categories = ["equippable", "nonEquippable"];
+                for cat in categories {
+                    if let Some(cat_obj) = item_list.get(cat).and_then(|v| v.as_object()) {
+                        for (_base_type_id, base_type_val) in cat_obj {
+                            if let Some(sub_items) = base_type_val.get("subItems").and_then(|v| v.as_object()) {
+                                for (_sub_id, sub_item_val) in sub_items {
+                                    if let Some(id) = sub_item_val.get("id").and_then(|v| v.as_str()) {
+                                        if let Some(key) = sub_item_val.get("displayNameKey").and_then(|v| v.as_str()) {
+                                            self.item_map.insert(id.to_string(), key.to_string());
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -128,6 +158,12 @@ impl Resolver {
     }
 
     pub fn get_skill_name(&self, id: &str) -> String {
+        // Try direct translation lookup pattern: Skills.Skill_{ID}_0_Name
+        let direct_key = format!("Skills.Skill_{}_0_Name", id);
+        if let Some(trans) = self.translations.get(&direct_key) {
+            return trans.clone();
+        }
+
         if let Some(data) = self.ability_map.get(id) {
             if let Some(name) = &data.name {
                 return name.clone();
@@ -138,6 +174,42 @@ impl Resolver {
                 }
                 return key.clone();
             }
+        }
+        id.to_string()
+    }
+
+    pub fn get_skill_node_name(&self, skill_id: &str, node_id: &str) -> String {
+        let key = format!("Skills.Skill_{}_{}_Name", skill_id, node_id);
+        if let Some(trans) = self.translations.get(&key) {
+            return trans.clone();
+        }
+        format!("Node {}", node_id)
+    }
+
+    pub fn get_passive_name(&self, class_id: u8, node_id: u8) -> String {
+        let prefix = match class_id {
+            0 => "pr",
+            1 => "mg",
+            2 => "se",
+            3 => "ac",
+            4 => "rg",
+            _ => return format!("Unknown Class {}", class_id),
+        };
+        
+        let key = format!("Skills.Skill_{}-1_{}_Name", prefix, node_id);
+        
+        if let Some(trans) = self.translations.get(&key) {
+            return trans.clone();
+        }
+        format!("Passive {}", node_id)
+    }
+
+    pub fn get_item_name(&self, id: &str) -> String {
+        if let Some(key) = self.item_map.get(id) {
+            if let Some(trans) = self.translations.get(key) {
+                return trans.clone();
+            }
+            return key.clone();
         }
         id.to_string()
     }
