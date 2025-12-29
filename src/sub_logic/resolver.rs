@@ -9,6 +9,7 @@ pub struct Resolver {
     affix_map: HashMap<String, AffixData>,
     ability_map: HashMap<String, AbilityData>,
     item_map: HashMap<String, String>,
+    unique_map: HashMap<String, String>,
 }
 
 struct AffixData {
@@ -28,11 +29,13 @@ impl Resolver {
             affix_map: HashMap::new(),
             ability_map: HashMap::new(),
             item_map: HashMap::new(),
+            unique_map: HashMap::new(),
         };
 
         resolver.load_translations("translations.json")?;
         resolver.load_affixes("item_db.json")?;
         resolver.load_items("item_db.json")?;
+        resolver.load_uniques("item_db.json")?;
         resolver.load_abilities("le_abilities.json")?;
 
         Ok(resolver)
@@ -82,6 +85,24 @@ impl Resolver {
                                     }
                                 }
                             }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn load_uniques(&mut self, path: &str) -> Result<()> {
+        if let Ok(file) = File::open(path) {
+            let reader = BufReader::new(file);
+            let json: Value = serde_json::from_reader(reader)?;
+            
+            if let Some(unique_list) = json.get("uniqueList").and_then(|v| v.get("uniques")).and_then(|v| v.as_object()) {
+                for (_key, value) in unique_list {
+                    if let Some(id) = value.get("id").and_then(|v| v.as_str()) {
+                        if let Some(key) = value.get("displayNameKey").and_then(|v| v.as_str()) {
+                            self.unique_map.insert(id.to_string(), key.to_string());
                         }
                     }
                 }
@@ -205,6 +226,14 @@ impl Resolver {
     }
 
     pub fn get_item_name(&self, id: &str) -> String {
+        // Check uniques first
+        if let Some(key) = self.unique_map.get(id) {
+             if let Some(trans) = self.translations.get(key) {
+                return trans.clone();
+            }
+            return key.clone();
+        }
+        // Then base items
         if let Some(key) = self.item_map.get(id) {
             if let Some(trans) = self.translations.get(key) {
                 return trans.clone();

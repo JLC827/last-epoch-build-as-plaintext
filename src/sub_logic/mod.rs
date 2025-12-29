@@ -295,7 +295,11 @@ fn write_skills(file: &mut File, json: &Value, resolver: &Resolver) -> Result<()
 }
 
 fn write_passives(file: &mut File, json: &Value, resolver: &Resolver) -> Result<()> {
-    let class_id = json.get("characterClassId").and_then(|v| v.as_u64()).unwrap_or(255) as u8;
+    let class_id = json.get("data")
+        .and_then(|d| d.get("bio"))
+        .and_then(|b| b.get("characterClass"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(255) as u8;
     
     if let Some(char_tree) = json.get("data").and_then(|d| d.get("charTree")) {
         writeln!(file, "\nPassive Tree:")?;
