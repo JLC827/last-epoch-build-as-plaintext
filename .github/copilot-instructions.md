@@ -16,3 +16,4 @@ fail quick, fail fast. KISS principle.
 You work with text files, so saving of files to allow you to parse output is encouraged, such as to help debug HTML content or test that data is being retrieved correctly.
 Be aware of rate limiting and implement delays or retries as needed to avoid being blocked by the target website, if needed. Watch out for cloudlflare blocks.
 We seem to be getting inconsistent results with headless chromium, so keep that in mind if something works then later does not. Consider adding logging to help debug such issues. Also, while we are in the development phase, consider keeping code, rather than deleting it, if it might help debug intermittent issues. Maybe using console args to allow running different scraper attempts.
+The terminal is powershell on windows 11. Avoid using unix specific commands.
