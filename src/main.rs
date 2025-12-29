@@ -25,6 +25,13 @@ fn main() -> Result<()> {
     
     let browser = Browser::new(LaunchOptions {
         headless: true,
+        window_size: Some((1920, 1080)),
+        args: vec![
+            "--disable-blink-features=AutomationControlled",
+            "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+        ].iter().map(|s| std::ffi::OsStr::new(s)).collect(),
         ..Default::default()
     })?;
 
@@ -44,216 +51,154 @@ fn main() -> Result<()> {
 
     println!("Page loaded. Extracting data...");
 
-    let stats = extract_stats(&tab)?;
-    let skills = extract_skills(&tab)?;
-    let equipment = extract_equipment(&tab)?;
+    let build_info = extract_build_info(&tab)?;
+    let build_json: Value = serde_json::from_str(&build_info)?;
 
     let mut file = File::create(&args.output)?;
     writeln!(file, "Build Data for {}\n", args.url)?;
     
     writeln!(file, "--- Character Stats ---")?;
-    writeln!(file, "{}", stats)?;
+    write_stats(&mut file, &build_json)?;
     
     writeln!(file, "\n--- Skills & Passives ---")?;
-    writeln!(file, "{}", skills)?;
+    write_skills(&mut file, &build_json)?;
     
     writeln!(file, "\n--- Equipment ---")?;
-    writeln!(file, "{}", equipment)?;
+    write_equipment(&mut file, &build_json)?;
 
     println!("Data saved to {}", args.output);
 
     Ok(())
 }
 
-fn extract_stats(tab: &headless_chrome::Tab) -> Result<String> {
+fn extract_build_info(tab: &headless_chrome::Tab) -> Result<String> {
     let script = r#"
         (function() {
-            const stats = {};
+            const buildInfo = window.buildInfo;
+            if (!buildInfo) return null;
             
-            function findTextContent(text) {
-                const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
-                let node;
-                while(node = walker.nextNode()) {
-                    if(node.textContent.includes(text)) {
-                        return node.parentElement.textContent.trim();
-                    }
+            // Parse precalc_data if it's a string
+            if (typeof buildInfo.precalc_data === 'string') {
+                try {
+                    buildInfo.precalc_data = JSON.parse(buildInfo.precalc_data);
+                } catch (e) {
+                    // ignore
                 }
-                return "Not found";
             }
-
-            stats.class = findTextContent("Class:");
-            stats.level = findTextContent("Level:");
             
-            // Try to find attributes
-            // They are usually in a list. We'll look for specific attribute names.
-            const attributes = ["Strength", "Dexterity", "Intelligence", "Attunement", "Vitality"];
-            stats.attributes = {};
-            
-            attributes.forEach(attr => {
-                // Find the element that contains exactly the attribute name
-                const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
-                let node;
-                while(node = walker.nextNode()) {
-                    if (node.textContent.trim() === attr) {
-                        // The value is likely in a sibling or parent's other child
-                        // Let's try to get the parent's text content
-                        stats.attributes[attr] = node.parentElement.parentElement.textContent.trim();
-                        break;
-                    }
-                }
-            });
-
-            // Resistances
-            const resistances = ["Fire", "Lightning", "Cold", "Physical", "Poison", "Necrotic", "Void"];
-            stats.resistances = {};
-            resistances.forEach(res => {
-                 const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
-                let node;
-                while(node = walker.nextNode()) {
-                    if (node.textContent.trim() === res) {
-                        stats.resistances[res] = node.parentElement.parentElement.textContent.trim();
-                        break;
-                    }
-                }
-            });
-
-            return JSON.stringify(stats);
+            return JSON.stringify(buildInfo);
         })()
     "#;
     
     let remote_object = tab.evaluate(script, false)?;
-    let result: Value = remote_object.value.unwrap();
+    let value = remote_object.value.ok_or_else(|| anyhow::anyhow!("No value returned from script"))?;
     
-    let mut output = String::new();
-    if let Some(c) = result["class"].as_str() { output.push_str(&format!("{}\n", c)); }
-    if let Some(l) = result["level"].as_str() { output.push_str(&format!("{}\n", l)); }
-    
-    output.push_str("\nAttributes:\n");
-    if let Some(attrs) = result["attributes"].as_object() {
-        for (k, v) in attrs {
-            if let Some(val) = v.as_str() {
-                // Clean up the string if it contains the label twice or extra info
-                output.push_str(&format!("{}: {}\n", k, val));
-            }
-        }
-    }
-
-    output.push_str("\nResistances:\n");
-    if let Some(res) = result["resistances"].as_object() {
-        for (k, v) in res {
-            if let Some(val) = v.as_str() {
-                output.push_str(&format!("{}: {}\n", k, val));
-            }
-        }
+    if value.is_null() {
+        return Err(anyhow::anyhow!("buildInfo not found on page"));
     }
     
-    Ok(output)
+    // The value returned by evaluate is a serde_json::Value. 
+    // If it's a string (JSON.stringify result), we need to unquote it? 
+    // Actually headless_chrome returns the value as is. 
+    // If the script returns a string, value is a String.
+    // Wait, I returned JSON.stringify(buildInfo), so it's a string.
+    
+    if let Some(s) = value.as_str() {
+        Ok(s.to_string())
+    } else {
+        Ok(value.to_string())
+    }
 }
 
-fn extract_skills(tab: &headless_chrome::Tab) -> Result<String> {
-    // Skills are usually images with tooltips or text.
-    // We'll look for the "Skills" section.
-    let script = r#"
-        (function() {
-            const skills = [];
-            // Strategy: Look for elements that might be skills.
-            // In LE Tools, skills are often in a bar.
-            // Let's try to find the "Skills" header and then look for siblings.
-            
-            // Fallback: Dump all text that looks like a skill name (hard to know without list).
-            // Better: Look for the specific container.
-            // Let's assume there are 5 specialized skills.
-            
-            // Try to find images that have 'skill' in their src or alt
-            const images = document.querySelectorAll('img');
-            const skillImages = [];
-            images.forEach(img => {
-                if (img.src.includes('skills') || img.alt.includes('Skill')) {
-                    // This might be a skill icon.
-                    // The name might be in the alt text or a sibling.
-                    if (img.alt) skills.push(img.alt);
+fn write_stats(file: &mut File, json: &Value) -> Result<()> {
+    if let Some(data) = json.get("precalc_data").and_then(|p| p.get("data")) {
+        if let Some(general) = data.get("general") {
+            writeln!(file, "General:")?;
+            if let Some(obj) = general.as_object() {
+                for (k, v) in obj {
+                    writeln!(file, "  {}: {}", k, v)?;
                 }
-            });
-            
-            // Also look for "Passives"
-            // This is hard. Let's just return what we found.
-            return JSON.stringify(skills);
-        })()
-    "#;
-    
-    let remote_object = tab.evaluate(script, false)?;
-    let result: Value = remote_object.value.unwrap();
-    
-    let mut output = String::new();
-    if let Some(arr) = result.as_array() {
-        for item in arr {
-            if let Some(s) = item.as_str() {
-                output.push_str(&format!("- {}\n", s));
             }
         }
+        
+        if let Some(attributes) = data.get("attributes") {
+            writeln!(file, "\nAttributes:")?;
+            if let Some(obj) = attributes.as_object() {
+                for (k, v) in obj {
+                    writeln!(file, "  {}: {}", k, v)?;
+                }
+            }
+        }
+        
+        if let Some(resistances) = data.get("resistances") {
+            writeln!(file, "\nResistances:")?;
+            if let Some(obj) = resistances.as_object() {
+                for (k, v) in obj {
+                    writeln!(file, "  {}: {}", k, v)?;
+                }
+            }
+        }
+        
+        if let Some(defences) = data.get("defences") {
+            writeln!(file, "\nDefences:")?;
+            if let Some(obj) = defences.as_object() {
+                for (k, v) in obj {
+                    writeln!(file, "  {}: {}", k, v)?;
+                }
+            }
+        }
+    } else {
+        writeln!(file, "No stats data found.")?;
     }
-    
-    if output.is_empty() {
-        output.push_str("No skills found (extraction logic needs refinement based on DOM).");
-    }
-    
-    Ok(output)
+    Ok(())
 }
 
-fn extract_equipment(tab: &headless_chrome::Tab) -> Result<String> {
-    // Equipment is usually in slots.
-    // We can try to find the item names.
-    // Items in LE Tools often have a specific class or structure.
-    // Let's try to find all elements with a tooltip attribute or similar.
-    
-    let script = r#"
-        (function() {
-            const items = [];
-            // Look for elements that look like items.
-            // Often they are links or divs with background images.
-            // Let's try to find text that matches known item rarities or types? No.
-            
-            // Let's try to find the equipment grid.
-            // It's usually near the character model.
-            
-            // A generic approach: Find all elements that have a 'data-item-id' or similar?
-            // Or just dump all text in the "Equipment" area if we can find it.
-            
-            // Let's try to find the "Equipment" header? It might not exist.
-            
-            // Let's look for the item slots by their typical names in the DOM if possible.
-            // But we don't know them.
-            
-            // Let's try to find all images that look like items (e.g. /items/ in src)
-            const images = document.querySelectorAll('img');
-            images.forEach(img => {
-                if (img.src.includes('/items/') || img.src.includes('/unique-items/')) {
-                    // This is likely an item.
-                    // Try to get the name from alt or title.
-                    if (img.alt) items.push(img.alt);
-                    else if (img.title) items.push(img.title);
-                }
-            });
-            
-            return JSON.stringify(items);
-        })()
-    "#;
-    
-    let remote_object = tab.evaluate(script, false)?;
-    let result: Value = remote_object.value.unwrap();
-    
-    let mut output = String::new();
-    if let Some(arr) = result.as_array() {
-        for item in arr {
-            if let Some(s) = item.as_str() {
-                output.push_str(&format!("- {}\n", s));
+fn write_skills(file: &mut File, json: &Value) -> Result<()> {
+    if let Some(data) = json.get("data") {
+        if let Some(hud) = data.get("hud").and_then(|h| h.as_array()) {
+            writeln!(file, "Active Skills (HUD):")?;
+            for skill in hud {
+                writeln!(file, "  - {}", skill)?;
             }
         }
+        
+        if let Some(trees) = data.get("skillTrees").and_then(|t| t.as_array()) {
+            writeln!(file, "\nSkill Trees Configured:")?;
+            for tree in trees {
+                if let Some(id) = tree.get("treeID") {
+                    writeln!(file, "  - ID: {}", id)?;
+                    // We could list selected nodes here if needed
+                }
+            }
+        }
+    } else {
+        writeln!(file, "No skills data found.")?;
     }
-    
-    if output.is_empty() {
-        output.push_str("No equipment found (extraction logic needs refinement based on DOM).");
-    }
-    
-    Ok(output)
+    Ok(())
 }
+
+fn write_equipment(file: &mut File, json: &Value) -> Result<()> {
+    if let Some(equipment) = json.get("data").and_then(|d| d.get("equipment").and_then(|e| e.as_object())) {
+        for (slot, item) in equipment {
+            writeln!(file, "Slot: {}", slot)?;
+            if let Some(id) = item.get("id") {
+                writeln!(file, "  Item ID: {}", id)?;
+            }
+            if let Some(affixes) = item.get("affixes").and_then(|a| a.as_array()) {
+                writeln!(file, "  Affixes:")?;
+                for affix in affixes {
+                    let id = affix.get("id").unwrap_or(&Value::Null);
+                    let tier = affix.get("tier").unwrap_or(&Value::Null);
+                    let range = affix.get("r").unwrap_or(&Value::Null);
+                    writeln!(file, "    - ID: {}, Tier: {}, Roll: {}", id, tier, range)?;
+                }
+            }
+            writeln!(file, "")?;
+        }
+    } else {
+        writeln!(file, "No equipment data found.")?;
+    }
+    Ok(())
+}
+
+// Removed unused functions
