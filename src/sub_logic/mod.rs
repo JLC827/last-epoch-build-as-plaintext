@@ -6,6 +6,9 @@ use std::io::Write;
 use std::time::Duration;
 use serde_json::Value;
 
+mod resolver;
+use resolver::Resolver;
+
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 pub struct Args {
@@ -151,6 +154,10 @@ pub fn run() -> Result<()> {
     let build_info = extract_build_info(&tab)?;
     let build_json: Value = serde_json::from_str(&build_info)?;
 
+    // Initialize Resolver
+    println!("Initializing data resolver...");
+    let resolver = Resolver::new()?;
+
     let mut file = File::create(&args.output)?;
     writeln!(file, "Build Data for {}\n", args.url)?;
     
@@ -158,10 +165,10 @@ pub fn run() -> Result<()> {
     write_stats(&mut file, &build_json)?;
     
     writeln!(file, "\n--- Skills & Passives ---")?;
-    write_skills(&mut file, &build_json)?;
+    write_skills(&mut file, &build_json, &resolver)?;
     
     writeln!(file, "\n--- Equipment ---")?;
-    write_equipment(&mut file, &build_json)?;
+    write_equipment(&mut file, &build_json, &resolver)?;
 
     println!("Data saved to {}", args.output);
 
@@ -244,20 +251,26 @@ fn write_stats(file: &mut File, json: &Value) -> Result<()> {
     Ok(())
 }
 
-fn write_skills(file: &mut File, json: &Value) -> Result<()> {
+fn write_skills(file: &mut File, json: &Value, resolver: &Resolver) -> Result<()> {
     if let Some(data) = json.get("data") {
         if let Some(hud) = data.get("hud").and_then(|h| h.as_array()) {
             writeln!(file, "Active Skills (HUD):")?;
             for skill in hud {
-                writeln!(file, "  - {}", skill)?;
+                if let Some(id) = skill.as_str() {
+                    let name = resolver.get_skill_name(id);
+                    writeln!(file, "  - {} ({})", name, id)?;
+                } else {
+                    writeln!(file, "  - {}", skill)?;
+                }
             }
         }
         
         if let Some(trees) = data.get("skillTrees").and_then(|t| t.as_array()) {
             writeln!(file, "\nSkill Trees Configured:")?;
             for tree in trees {
-                if let Some(id) = tree.get("treeID") {
-                    writeln!(file, "  - ID: {}", id)?;
+                if let Some(id) = tree.get("treeID").and_then(|v| v.as_str()) {
+                    let name = resolver.get_skill_name(id);
+                    writeln!(file, "  - {} (ID: {})", name, id)?;
                 }
             }
         }
@@ -267,7 +280,7 @@ fn write_skills(file: &mut File, json: &Value) -> Result<()> {
     Ok(())
 }
 
-fn write_equipment(file: &mut File, json: &Value) -> Result<()> {
+fn write_equipment(file: &mut File, json: &Value, resolver: &Resolver) -> Result<()> {
     if let Some(equipment) = json.get("data").and_then(|d| d.get("equipment").and_then(|e| e.as_object())) {
         for (slot, item) in equipment {
             writeln!(file, "Slot: {}", slot)?;
@@ -277,10 +290,16 @@ fn write_equipment(file: &mut File, json: &Value) -> Result<()> {
             if let Some(affixes) = item.get("affixes").and_then(|a| a.as_array()) {
                 writeln!(file, "  Affixes:")?;
                 for affix in affixes {
-                    let id = affix.get("id").unwrap_or(&Value::Null);
+                    let id_val = affix.get("id").unwrap_or(&Value::Null);
                     let tier = affix.get("tier").unwrap_or(&Value::Null);
                     let range = affix.get("r").unwrap_or(&Value::Null);
-                    writeln!(file, "    - ID: {}, Tier: {}, Roll: {}", id, tier, range)?;
+                    
+                    let mut name = "Unknown".to_string();
+                    if let Some(id_str) = id_val.as_str() {
+                        name = resolver.get_affix_name(id_str);
+                    }
+
+                    writeln!(file, "    - {} (T{}) [Roll: {}] (ID: {})", name, tier, range, id_val)?;
                 }
             }
             writeln!(file, "")?;
