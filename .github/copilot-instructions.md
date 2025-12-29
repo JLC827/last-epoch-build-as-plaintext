@@ -17,3 +17,8 @@ You work with text files, so saving of files to allow you to parse output is enc
 Be aware of rate limiting and implement delays or retries as needed to avoid being blocked by the target website, if needed. Watch out for cloudlflare blocks.
 We seem to be getting inconsistent results with headless chromium, so keep that in mind if something works then later does not. Consider adding logging to help debug such issues. Also, while we are in the development phase, consider keeping code, rather than deleting it, if it might help debug intermittent issues. Maybe using console args to allow running different scraper attempts.
 The terminal is powershell on windows 11. Avoid using unix specific commands.
+
+You can use curl to fetch JS files if needed to help parse out data.
+e.g. "curl -o hashed_js/planner_d0feed.js https://www.lastepochtools.com/data/version135/planner/js/d0feedd12833161e6575dc3d36021eab.js;"
+
+Don't delete main.rs. Make changes as needed instead or add new files.
