@@ -265,7 +265,11 @@ fn write_skills(file: &mut File, json: &Value, resolver: &Resolver) -> Result<()
             for skill in hud {
                 if let Some(id) = skill.as_str() {
                     let name = resolver.get_skill_name(id);
-                    writeln!(file, "  - {} ({})", name, id)?;
+                    writeln!(file, "  - {}", name)?;
+                    let desc = resolver.get_skill_description(id);
+                    if !desc.is_empty() {
+                        writeln!(file, "    {}", desc)?;
+                    }
                 } else {
                     writeln!(file, "  - {}", skill)?;
                 }
@@ -277,12 +281,16 @@ fn write_skills(file: &mut File, json: &Value, resolver: &Resolver) -> Result<()
             for tree in trees {
                 if let Some(id) = tree.get("treeID").and_then(|v| v.as_str()) {
                     let name = resolver.get_skill_name(id);
-                    writeln!(file, "  - {} (ID: {})", name, id)?;
+                    writeln!(file, "  - {}", name)?;
                     
                     if let Some(selected) = tree.get("selected").and_then(|s| s.as_object()) {
                         for (node_id, points) in selected {
                             let node_name = resolver.get_skill_node_name(id, node_id);
                             writeln!(file, "    - {} (Points: {})", node_name, points)?;
+                            let node_desc = resolver.get_skill_node_description(id, node_id);
+                            if !node_desc.is_empty() {
+                                writeln!(file, "      {}", node_desc)?;
+                            }
                         }
                     }
                 }
@@ -308,6 +316,10 @@ fn write_passives(file: &mut File, json: &Value, resolver: &Resolver) -> Result<
                 if let Ok(node_id) = node_id_str.parse::<u8>() {
                     let name = resolver.get_passive_name(class_id, node_id);
                     writeln!(file, "  - {} (Points: {})", name, points)?;
+                    let desc = resolver.get_passive_description(class_id, node_id);
+                    if !desc.is_empty() {
+                        writeln!(file, "    {}", desc)?;
+                    }
                 } else {
                      writeln!(file, "  - Node {} (Points: {})", node_id_str, points)?;
                 }
@@ -323,21 +335,28 @@ fn write_equipment(file: &mut File, json: &Value, resolver: &Resolver) -> Result
             writeln!(file, "Slot: {}", slot)?;
             if let Some(id) = item.get("id").and_then(|v| v.as_str()) {
                 let item_name = resolver.get_item_name(id);
-                writeln!(file, "  Item: {} (ID: {})", item_name, id)?;
+                writeln!(file, "  Item: {}", item_name)?;
+                
+                let implicits = resolver.get_item_implicits(id);
+                if !implicits.is_empty() {
+                     writeln!(file, "  Implicits: {}", implicits)?;
+                }
             }
             if let Some(affixes) = item.get("affixes").and_then(|a| a.as_array()) {
                 writeln!(file, "  Affixes:")?;
                 for affix in affixes {
-                    let id_val = affix.get("id").unwrap_or(&Value::Null);
-                    let tier = affix.get("tier").unwrap_or(&Value::Null);
-                    let range = affix.get("r").unwrap_or(&Value::Null);
-                    
-                    let mut name = "Unknown".to_string();
-                    if let Some(id_str) = id_val.as_str() {
-                        name = resolver.get_affix_name(id_str);
+                    if let Some(id_str) = affix.get("id").and_then(|v| v.as_str()) {
+                        let tier = affix.get("tier").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
+                        let roll = affix.get("r").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                        
+                        let detail = resolver.get_affix_detail(id_str, tier, roll);
+                        if !detail.is_empty() {
+                            writeln!(file, "    - {}", detail)?;
+                        } else {
+                             let name = resolver.get_affix_name(id_str);
+                             writeln!(file, "    - {} (T{})", name, tier)?;
+                        }
                     }
-
-                    writeln!(file, "    - {} (T{}) [Roll: {}] (ID: {})", name, tier, range, id_val)?;
                 }
             }
             writeln!(file, "")?;
