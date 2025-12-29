@@ -45,11 +45,58 @@ fn main() -> Result<()> {
     tab.wait_for_element("body")?;
     
     // Give React some time to render the dynamic content
-    // A better way would be to wait for a specific element that we know exists in the rendered app
-    // But for now, a sleep is a simple way to ensure scripts have run.
     std::thread::sleep(Duration::from_secs(5));
 
     println!("Page loaded. Extracting data...");
+
+    // Probe 8: Fetch language files
+    let probe8_script = r#"
+        (async () => {
+            let result = {};
+            try {
+                let siteMarker = window['langSiteCacheMarker'] || '96';
+                let url = '/static_data/i18n/en.json?' + siteMarker;
+                result.url = url;
+                
+                let resp = await fetch(url);
+                if (resp.ok) {
+                    result.en_json = await resp.json();
+                    result.status = "success";
+                } else {
+                    result.status = "failed";
+                    result.http_code = resp.status;
+                    
+                    // Try fallback
+                    let fallbackUrl = '/data/i18n_fallback/en.json';
+                    let resp2 = await fetch(fallbackUrl);
+                    if (resp2.ok) {
+                        result.en_json = await resp2.json();
+                        result.status = "success_fallback";
+                    } else {
+                        result.fallback_status = resp2.status;
+                    }
+                }
+            } catch (e) {
+                result.status = "error";
+                result.error = e.toString();
+            }
+            return JSON.stringify(result);
+        })()
+    "#;
+
+    println!("Running Probe 8 (Language Fetch)...");
+    let probe8_result = tab.evaluate(probe8_script, true)?;
+    if let Some(val) = probe8_result.value {
+        if let Some(s) = val.as_str() {
+             let mut file = File::create("probe8_result.json")?;
+             file.write_all(s.as_bytes())?;
+             println!("Probe 8 result written to probe8_result.json");
+        } else {
+            println!("Probe 8 returned non-string: {:?}", val);
+        }
+    } else {
+        println!("Probe 8 returned no value");
+    }
 
     let build_info = extract_build_info(&tab)?;
     let build_json: Value = serde_json::from_str(&build_info)?;
