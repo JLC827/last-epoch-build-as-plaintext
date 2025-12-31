@@ -10,8 +10,27 @@ pub struct Resolver {
     ability_map: HashMap<String, AbilityData>,
     item_map: HashMap<String, String>, // ID -> NameKey
     item_data_map: HashMap<String, ItemData>, // ID -> Implicits
+    base_item_map: HashMap<(u32, u32), ItemData>, // (BaseType, SubType) -> Implicits
     unique_map: HashMap<String, String>,
+    unique_data_map: HashMap<String, UniqueData>,
     property_map: HashMap<u32, String>,
+}
+
+#[derive(Debug)]
+struct UniqueData {
+    base_type_id: u32,
+    sub_type_id: u32,
+    mods: Vec<UniqueMod>,
+    tooltip_descriptions: Vec<String>,
+}
+
+#[derive(Debug)]
+struct UniqueMod {
+    property_id: u32,
+    value: f32,
+    max_value: f32,
+    roll_id: usize,
+    can_roll: bool,
 }
 
 #[derive(Debug)]
@@ -39,12 +58,12 @@ struct AbilityData {
     description_key: Option<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct ItemData {
     implicits: Vec<ImplicitData>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct ImplicitData {
     property_id: u32,
     value: f32,
@@ -59,17 +78,42 @@ impl Resolver {
             ability_map: HashMap::new(),
             item_map: HashMap::new(),
             item_data_map: HashMap::new(),
+            base_item_map: HashMap::new(),
             unique_map: HashMap::new(),
+            unique_data_map: HashMap::new(),
             property_map: Self::init_property_map(),
         };
 
         resolver.load_translations("translations.json")?;
+        resolver.load_properties("core_db.json")?;
         resolver.load_affixes("item_db.json")?;
         resolver.load_items("item_db.json")?;
         resolver.load_uniques("item_db.json")?;
         resolver.load_abilities("le_abilities.json")?;
 
         Ok(resolver)
+    }
+
+    fn load_properties(&mut self, path: &str) -> Result<()> {
+        if let Ok(file) = File::open(path) {
+            let reader = BufReader::new(file);
+            let json: Value = serde_json::from_reader(reader)?;
+            
+            if let Some(list) = json.get("propertyList").and_then(|v| v.as_array()) {
+                for item in list {
+                    if let Some(id) = item.get("property").and_then(|v| v.as_u64()) {
+                        if let Some(key) = item.get("propertyNameKey").and_then(|v| v.as_str()) {
+                            if let Some(trans) = self.translations.get(key) {
+                                self.property_map.insert(id as u32, trans.clone());
+                            } else {
+                                self.property_map.insert(id as u32, key.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     fn init_property_map() -> HashMap<u32, String> {
@@ -232,7 +276,9 @@ impl Resolver {
                 let categories = ["equippable", "nonEquippable"];
                 for cat in categories {
                     if let Some(cat_obj) = item_list.get(cat).and_then(|v| v.as_object()) {
-                        for (_base_type_id, base_type_val) in cat_obj {
+                        for (base_type_key, base_type_val) in cat_obj {
+                            let base_type_id = base_type_key.parse::<u32>().unwrap_or(0);
+                            
                             if let Some(sub_items) = base_type_val.get("subItems").and_then(|v| v.as_array()) {
                                 for sub_item_val in sub_items {
                                     if let Some(id) = sub_item_val.get("id").and_then(|v| v.as_str()) {
@@ -252,7 +298,11 @@ impl Resolver {
                                                 });
                                             }
                                         }
-                                        self.item_data_map.insert(id.to_string(), ItemData { implicits });
+                                        let item_data = ItemData { implicits };
+                                        self.item_data_map.insert(id.to_string(), item_data.clone());
+                                        
+                                        let sub_type_id = id.parse::<u32>().unwrap_or(0);
+                                        self.base_item_map.insert((base_type_id, sub_type_id), item_data);
                                     }
                                 }
                             }
@@ -275,7 +325,11 @@ impl Resolver {
                                                 });
                                             }
                                         }
-                                        self.item_data_map.insert(id.to_string(), ItemData { implicits });
+                                        let item_data = ItemData { implicits };
+                                        self.item_data_map.insert(id.to_string(), item_data.clone());
+                                        
+                                        let sub_type_id = id.parse::<u32>().unwrap_or(0);
+                                        self.base_item_map.insert((base_type_id, sub_type_id), item_data);
                                     }
                                 }
                             }
@@ -298,6 +352,44 @@ impl Resolver {
                         if let Some(key) = value.get("displayNameKey").and_then(|v| v.as_str()) {
                             self.unique_map.insert(id.to_string(), key.to_string());
                         }
+                        
+                        let base_type_id = value.get("baseTypeId").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                        let sub_type_id = value.get("subTypeId").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                        
+                        let mut mods = Vec::new();
+                        if let Some(mod_arr) = value.get("mods").and_then(|v| v.as_array()) {
+                            for m in mod_arr {
+                                let prop = m.get("property").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                                let val = m.get("value").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                                let max_val = m.get("maxValue").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                                let roll_id = m.get("rollId").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                                let can_roll = m.get("canRoll").and_then(|v| v.as_u64()).unwrap_or(0) == 1;
+                                
+                                mods.push(UniqueMod {
+                                    property_id: prop,
+                                    value: val,
+                                    max_value: max_val,
+                                    roll_id,
+                                    can_roll,
+                                });
+                            }
+                        }
+
+                        let mut tooltip_descriptions = Vec::new();
+                        if let Some(desc_arr) = value.get("tooltipDescriptions").and_then(|v| v.as_array()) {
+                            for d in desc_arr {
+                                if let Some(key) = d.get("descriptionKey").and_then(|v| v.as_str()) {
+                                    tooltip_descriptions.push(key.to_string());
+                                }
+                            }
+                        }
+                        
+                        self.unique_data_map.insert(id.to_string(), UniqueData {
+                            base_type_id,
+                            sub_type_id,
+                            mods,
+                            tooltip_descriptions,
+                        });
                     }
                 }
             }
@@ -424,16 +516,96 @@ impl Resolver {
                         )
                     };
 
+                    let affix_name = self.get_affix_name(id);
                     if roll_data.min == roll_data.max {
-                         parts.push(format!("+{} {}", val_s, prop_name));
+                         parts.push(format!("[T{}] +{} {}", tier, val_s, prop_name));
                     } else {
-                         parts.push(format!("+{} ({}-{}) {}", val_s, min_s, max_s, prop_name));
+                         parts.push(format!("[T{}] +{} ({}-{}) {}", tier, val_s, min_s, max_s, prop_name));
                     }
                 }
                 return parts.join(", ");
             }
         }
         "".to_string()
+    }
+
+    pub fn get_unique_detail(&self, id: &str, ir: &[u8]) -> Vec<String> {
+        let mut details = Vec::new();
+        
+        if let Some(data) = self.unique_data_map.get(id) {
+            // Base Implicits
+            if let Some(base_data) = self.base_item_map.get(&(data.base_type_id, data.sub_type_id)) {
+                for imp in &base_data.implicits {
+                    let prop_name = self.property_map.get(&imp.property_id).map(|s| s.as_str()).unwrap_or("Unknown");
+                    let min = imp.value;
+                    let max = imp.max_value;
+                    
+                    let (min_s, max_s) = if min.abs() < 2.0 && min != 0.0 {
+                        (format!("{:.0}%", min * 100.0), format!("{:.0}%", max * 100.0))
+                    } else {
+                        (format!("{:.0}", min), format!("{:.0}", max))
+                    };
+
+                    if min == max {
+                        details.push(format!("{} {}", min_s, prop_name));
+                    } else {
+                        details.push(format!("{}-{} {}", min_s, max_s, prop_name));
+                    }
+                }
+            }
+
+            // Unique Mods
+            for m in &data.mods {
+                let prop_name = self.property_map.get(&m.property_id).map(|s| s.as_str()).unwrap_or("Unknown");
+                
+                if !m.can_roll {
+                    let val = m.value;
+                    let val_s = if val.abs() < 2.0 && val != 0.0 {
+                        format!("{:.0}%", val * 100.0)
+                    } else {
+                        format!("{:.0}", val)
+                    };
+                    details.push(format!("+{} {}", val_s, prop_name));
+                } else {
+                    let roll_val = if m.roll_id < ir.len() {
+                        ir[m.roll_id] as f32
+                    } else {
+                        0.0 // Default to min if missing
+                    };
+                    
+                    let val = m.value + (m.max_value - m.value) * (roll_val / 255.0);
+                    
+                    let (val_s, min_s, max_s) = if m.value.abs() < 2.0 && m.value != 0.0 {
+                        (
+                            format!("{:.0}%", val * 100.0),
+                            format!("{:.0}%", m.value * 100.0),
+                            format!("{:.0}%", m.max_value * 100.0)
+                        )
+                    } else {
+                        (
+                            format!("{:.0}", val),
+                            format!("{:.0}", m.value),
+                            format!("{:.0}", m.max_value)
+                        )
+                    };
+
+                    if m.value == m.max_value {
+                         details.push(format!("+{} {}", val_s, prop_name));
+                    } else {
+                         details.push(format!("+{} ({}-{}) {}", val_s, min_s, max_s, prop_name));
+                    }
+                }
+            }
+
+            // Tooltip Descriptions
+            for key in &data.tooltip_descriptions {
+                if let Some(trans) = self.translations.get(key) {
+                    details.push(self.clean_html(trans));
+                }
+            }
+        }
+        
+        details
     }
 
     pub fn get_item_implicits(&self, id: &str) -> String {

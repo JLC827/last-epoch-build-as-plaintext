@@ -337,9 +337,25 @@ fn write_equipment(file: &mut File, json: &Value, resolver: &Resolver) -> Result
                 let item_name = resolver.get_item_name(id);
                 writeln!(file, "  Item: {}", item_name)?;
                 
-                let implicits = resolver.get_item_implicits(id);
-                if !implicits.is_empty() {
-                     writeln!(file, "  Implicits: {}", implicits)?;
+                let mut is_unique = false;
+                if let Some(ir_arr) = item.get("ir").and_then(|v| v.as_array()) {
+                    let ir: Vec<u8> = ir_arr.iter().map(|v| v.as_u64().unwrap_or(0) as u8).collect();
+                    let unique_details = resolver.get_unique_detail(id, &ir);
+                    
+                    if !unique_details.is_empty() {
+                        is_unique = true;
+                        writeln!(file, "  Stats:")?;
+                        for detail in unique_details {
+                            writeln!(file, "    - {}", detail)?;
+                        }
+                    }
+                }
+
+                if !is_unique {
+                    let implicits = resolver.get_item_implicits(id);
+                    if !implicits.is_empty() {
+                         writeln!(file, "  Implicits: {}", implicits)?;
+                    }
                 }
             }
             if let Some(affixes) = item.get("affixes").and_then(|a| a.as_array()) {
@@ -354,7 +370,7 @@ fn write_equipment(file: &mut File, json: &Value, resolver: &Resolver) -> Result
                             writeln!(file, "    - {}", detail)?;
                         } else {
                              let name = resolver.get_affix_name(id_str);
-                             writeln!(file, "    - {} (T{})", name, tier)?;
+                             writeln!(file, "    - [T{}] {}", tier, name)?;
                         }
                     }
                 }
