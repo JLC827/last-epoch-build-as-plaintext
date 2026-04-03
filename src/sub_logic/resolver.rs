@@ -716,6 +716,11 @@ impl Resolver {
                 output.push(c);
             }
         }
+        
+        output = output.replace("''", "'");
+        output = output.replace("'{'", "'");
+        output = output.replace("'}'", "'");
+        
         output
     }
 
@@ -802,3 +807,4 @@ impl Resolver {
     }
 }
 
+#[test] fn test_resolver() { let res = Resolver::new().unwrap(); println!("TR: {}", res.get_skill_name_bypassing("Skills.Skill_kn-1_10_0_Stat")); assert!(false); }

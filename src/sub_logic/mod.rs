@@ -478,7 +478,11 @@ fn write_passives(file: &mut File, json: &Value, resolver: &Resolver) -> Result<
                                 
                                 if let Some(stat_key) = stat.get("statNameKey").and_then(|v| v.as_str()) {
                                     let resolved_stat = resolver.get_skill_name_bypassing(stat_key);
-                                    effect_desc = format!("{} [{}]", val, resolved_stat);
+                                    if val == "?" {
+                                        effect_desc = resolved_stat;
+                                    } else {
+                                        effect_desc = format!("{} {}", val, resolved_stat);
+                                    }
                                 }
                                 
                                 if no_scaling {
