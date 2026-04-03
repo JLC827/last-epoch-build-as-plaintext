@@ -33,6 +33,8 @@ struct UniqueMod {
     max_value: f32,
     roll_id: usize,
     can_roll: bool,
+    tags: u32,
+    hide_in_tooltip: bool,
 }
 
 #[derive(Debug)]
@@ -40,6 +42,7 @@ struct AffixData {
     display_name_key: String,
     properties: Vec<String>,
     tiers: Vec<TierData>,
+    fallback_name: Option<String>,
 }
 
 #[derive(Debug)]
@@ -382,6 +385,8 @@ impl Resolver {
                                 let max_val = m.get("maxValue").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
                                 let roll_id = m.get("rollId").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
                                 let can_roll = m.get("canRoll").and_then(|v| v.as_u64()).unwrap_or(0) == 1;
+                                let tags = m.get("tags").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                                let hide_in_tooltip = m.get("hideInTooltip").and_then(|v| v.as_u64()).unwrap_or(0) > 0;
                                 
                                 mods.push(UniqueMod {
                                     property_id: prop,
@@ -389,6 +394,8 @@ impl Resolver {
                                     max_value: max_val,
                                     roll_id,
                                     can_roll,
+                                    tags,
+                                    hide_in_tooltip,
                                 });
                             }
                         }
@@ -456,10 +463,13 @@ impl Resolver {
                                     }
                                 }
                                 
+                                let fallback = obj.get("Ce").and_then(|v| v.as_str()).map(|s| s.to_string());
+                                
                                 self.affix_map.insert(id.to_string(), AffixData {
                                     display_name_key,
                                     properties,
                                     tiers,
+                                    fallback_name: fallback,
                                 });
                             }
                         }
@@ -520,7 +530,13 @@ impl Resolver {
                 for (i, roll_data) in tier_data.rolls.iter().enumerate() {
                     let default_key = String::new();
                     let prop_key = data.properties.get(i).unwrap_or(&default_key);
-                    let prop_name = self.translations.get(prop_key).map(|s| s.as_str()).unwrap_or("Unknown Property");
+                    let mut prop_name = self.translations.get(prop_key).map(|s| s.as_str()).unwrap_or("Unknown Property");
+                    
+                    if prop_name == "Unknown Property" {
+                        if let Some(ref fallback) = data.fallback_name {
+                            prop_name = fallback.as_str();
+                        }
+                    }
                     
                     let val = roll_data.min + (roll_data.max - roll_data.min) * (roll / 255.0);
                     
@@ -580,7 +596,14 @@ impl Resolver {
 
             // Unique Mods
             for m in &data.mods {
-                let prop_name = self.property_map.get(&m.property_id).map(|s| s.as_str()).unwrap_or("Unknown");
+                if m.hide_in_tooltip {
+                    continue;
+                }
+                let prop_name = if m.property_id == 98 {
+                    self.player_property_map.get(&m.tags).map(|s| s.as_str()).unwrap_or("Unknown Player Property")
+                } else {
+                    self.property_map.get(&m.property_id).map(|s| s.as_str()).unwrap_or("Unknown Property")
+                };
                 
                 if !m.can_roll {
                     let val = m.value;

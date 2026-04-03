@@ -582,10 +582,6 @@ fn write_equipment(file: &mut File, json: &Value, resolver: &Resolver) -> Result
                     writeln!(file, "  Item: {}", item_name)?;
                 }
                 
-                if let Some(fp) = item.get("fp").and_then(|v| v.as_u64()).or_else(|| item.get("forgingPotential").and_then(|v| v.as_u64())) {
-                    writeln!(file, "  Forging Potential: {}", fp)?;
-                }
-
                 let mut is_unique = false;
                 if let Some(ir_arr) = item.get("ir").and_then(|v| v.as_array()) {
                     let ir: Vec<u8> = ir_arr.iter().map(|v| v.as_u64().unwrap_or(0) as u8).collect();
