@@ -13,7 +13,6 @@ use resolver::Resolver;
 #[command(author, version, about, long_about = None)]
 pub struct Args {
     /// URL of the build planner to scrape
-    #[arg(short, long)]
     pub url: String,
 
     /// Output file path
