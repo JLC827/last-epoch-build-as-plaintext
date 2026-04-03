@@ -682,6 +682,13 @@ impl Resolver {
         id.to_string()
     }
 
+    pub fn get_skill_name_bypassing(&self, key: &str) -> String {
+        if let Some(trans) = self.translations.get(key) {
+            return trans.clone();
+        }
+        key.to_string()
+    }
+
     pub fn get_skill_description(&self, id: &str) -> String {
         if let Some(data) = self.ability_map.get(id) {
             if let Some(key) = &data.description_key {
@@ -730,11 +737,11 @@ impl Resolver {
 
     pub fn get_passive_name(&self, class_id: u8, node_id: u8) -> String {
         let prefix = match class_id {
-            0 => "pr",
+            0 => "po",
             1 => "mg",
-            2 => "se",
+            2 => "kn",
             3 => "ac",
-            4 => "rg",
+            4 => "ro",
             _ => return format!("Unknown Class {}", class_id),
         };
         
@@ -748,11 +755,11 @@ impl Resolver {
 
     pub fn get_passive_description(&self, class_id: u8, node_id: u8) -> String {
         let prefix = match class_id {
-            0 => "pr",
+            0 => "po",
             1 => "mg",
-            2 => "se",
+            2 => "kn",
             3 => "ac",
-            4 => "rg",
+            4 => "ro",
             _ => return "".to_string(),
         };
         

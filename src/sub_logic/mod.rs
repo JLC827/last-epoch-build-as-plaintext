@@ -58,30 +58,21 @@ pub fn run() -> Result<()> {
 
     println!("Page loaded. Starting extraction...");
 
-    // Probe 9: Dump window.le_
-    println!("Dumping window.le_...");
-    let probe9_script = r#"
-        (function() {
-            const seen = new WeakSet();
-            return JSON.stringify(window.le_, (key, value) => {
-                if (typeof value === "object" && value !== null) {
-                    if (seen.has(value)) {
-                        return;
-                    }
-                    seen.add(value);
-                }
-                return value;
-            });
-        })()
-    "#;
-    let probe9_res = tab.evaluate(probe9_script, false);
-    if let Ok(res) = probe9_res {
-        if let Some(val) = res.value {
-            if let Some(s) = val.as_str() {
-                let mut file = File::create("le_dump.json")?;
-                file.write_all(s.as_bytes())?;
-                println!("Saved le_dump.json");
-            }
+    // Dump LESkillTrees
+    let skill_trees_res = tab.evaluate("JSON.stringify(window.LESkillTrees || {})", false)?;
+    if let Some(val) = skill_trees_res.value {
+        if let Some(s) = val.as_str() {
+            std::fs::write("le_skill_trees.json", s)?;
+            println!("Saved le_skill_trees.json");
+        }
+    }
+
+    // Dump LECharTrees
+    let char_trees_res = tab.evaluate("JSON.stringify(window.LECharTrees || {})", false)?;
+    if let Some(val) = char_trees_res.value {
+        if let Some(s) = val.as_str() {
+            std::fs::write("le_char_trees.json", s)?;
+            println!("Saved le_char_trees.json");
         }
     }
 
@@ -319,6 +310,11 @@ fn write_stats(file: &mut File, json: &Value) -> Result<()> {
 }
 
 fn write_skills(file: &mut File, json: &Value, resolver: &Resolver) -> Result<()> {
+    // Load full skill trees graph
+    let skill_trees_dump: Option<Value> = std::fs::read_to_string("le_skill_trees.json")
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok());
+
     if let Some(data) = json.get("data") {
         if let Some(hud) = data.get("hud").and_then(|h| h.as_array()) {
             writeln!(file, "Active Skills (HUD):")?;
@@ -337,20 +333,61 @@ fn write_skills(file: &mut File, json: &Value, resolver: &Resolver) -> Result<()
         }
         
         if let Some(trees) = data.get("skillTrees").and_then(|t| t.as_array()) {
-            writeln!(file, "\nSkill Trees Configured:")?;
+            writeln!(file, "\n--- Skill Trees Configured ---")?;
             for tree in trees {
                 if let Some(id) = tree.get("treeID").and_then(|v| v.as_str()) {
                     let name = resolver.get_skill_name(id);
-                    writeln!(file, "  - {}", name)?;
+                    writeln!(file, "Skill: {}", name)?;
                     
-                    if let Some(selected) = tree.get("selected").and_then(|s| s.as_object()) {
-                        for (node_id, points) in selected {
-                            let node_name = resolver.get_skill_node_name(id, node_id);
-                            writeln!(file, "    - {} (Points: {})", node_name, points)?;
-                            let node_desc = resolver.get_skill_node_description(id, node_id);
-                            if !node_desc.is_empty() {
-                                writeln!(file, "      {}", node_desc)?;
+                    let selected = tree.get("selected").and_then(|s| s.as_object());
+                    let nodes_obj = skill_trees_dump.as_ref().and_then(|d| d.get(id)).and_then(|t| t.get("nodes")).and_then(|n| n.as_object());
+
+                    if let Some(nodes) = nodes_obj {
+                        let mut sorted_keys: Vec<_> = nodes.keys().collect();
+                        // Sort so output is deterministic
+                        sorted_keys.sort_by_key(|k| k.parse::<u32>().unwrap_or(0));
+
+                        for node_id_str in sorted_keys {
+                            if let Some(node_data) = nodes.get(node_id_str) {
+                                let points = selected.and_then(|s| s.get(node_id_str)).and_then(|v| v.as_u64()).unwrap_or(0);
+                                let node_name = resolver.get_skill_node_name(id, node_id_str);
+                                let max_pts = node_data.get("maxPoints").and_then(|v| v.as_u64()).unwrap_or(0);
+
+                                let mut reqs = Vec::new();
+                                if let Some(r_arr) = node_data.get("requirements").and_then(|v| v.as_array()) {
+                                    for r in r_arr {
+                                        if let Some(r_id) = r.get("nodeId").and_then(|v| v.as_u64()) {
+                                            let req_pts = r.get("requirement").and_then(|v| v.as_u64()).unwrap_or(0);
+                                            reqs.push(format!("Requires {} pts in Node {}", req_pts, r_id));
+                                        }
+                                    }
+                                }
+
+                                writeln!(file, "  - ID: Node_{}", node_id_str)?;
+                                writeln!(file, "    Name: \"{}\"", node_name)?;
+                                writeln!(file, "    AllocatedPoints: {}", points)?;
+                                writeln!(file, "    MaxPoints: {}", max_pts)?;
+                                if !reqs.is_empty() {
+                                    writeln!(file, "    Requirements: {:?}", reqs)?;
+                                } else {
+                                    writeln!(file, "    Requirements: []")?;
+                                }
+                                
+                                // Print description
+                                let node_desc = resolver.get_skill_node_description(id, node_id_str);
+                                if !node_desc.is_empty() {
+                                    // To keep YAML multiline, pad it
+                                    let padded_desc = node_desc.replace('\n', "\n      ");
+                                    writeln!(file, "    Effect: \"{}\"", padded_desc)?;
+                                }
+                                writeln!(file, "")?;
                             }
+                        }
+                    } else if let Some(sel) = selected {
+                        // Fallback
+                        for (node_id, points) in sel {
+                            let node_name = resolver.get_skill_node_name(id, node_id);
+                            writeln!(file, "  - {} (Points: {})", node_name, points)?;
                         }
                     }
                 }
@@ -369,19 +406,112 @@ fn write_passives(file: &mut File, json: &Value, resolver: &Resolver) -> Result<
         .and_then(|v| v.as_u64())
         .unwrap_or(255) as u8;
     
+    // Load full passive tree graph
+    let char_trees_dump: Option<Value> = std::fs::read_to_string("le_char_trees.json")
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok());
+
     if let Some(char_tree) = json.get("data").and_then(|d| d.get("charTree")) {
-        writeln!(file, "\nPassive Tree:")?;
-        if let Some(selected) = char_tree.get("selected").and_then(|s| s.as_object()) {
-            for (node_id_str, points) in selected {
-                if let Ok(node_id) = node_id_str.parse::<u8>() {
-                    let name = resolver.get_passive_name(class_id, node_id);
-                    writeln!(file, "  - {} (Points: {})", name, points)?;
-                    let desc = resolver.get_passive_description(class_id, node_id);
-                    if !desc.is_empty() {
-                        writeln!(file, "    {}", desc)?;
+        writeln!(file, "\n--- Class Passives DAG ---")?;
+        
+        let selected_pts = char_tree.get("selected").and_then(|s| s.as_object());
+        
+        let nodes_obj = char_trees_dump
+            .as_ref()
+            .and_then(|d| d.get("trees"))
+            .and_then(|t| t.as_array())
+            .and_then(|arr| arr.get(class_id as usize))
+            .and_then(|t| t.get("characterTree"))
+            .and_then(|c| c.get("nodes"))
+            .and_then(|n| n.as_object());
+
+        if let Some(nodes) = nodes_obj {
+            let mut sorted_keys: Vec<_> = nodes.keys().collect();
+            sorted_keys.sort_by_key(|k| k.parse::<u32>().unwrap_or(0));
+
+            for node_id_str in sorted_keys {
+                if let Some(node_data) = nodes.get(node_id_str) {
+                    let p = selected_pts
+                        .and_then(|s| s.get(node_id_str))
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    
+                    if p == 0 { continue; } // Omit 0-point passives, as passive trees are too gigantic
+
+                    if let Ok(node_id) = node_id_str.parse::<u8>() {
+                        let mut name = resolver.get_passive_name(class_id, node_id);
+                        if name.starts_with("Skills.") {
+                            if let Some(node_name_key) = node_data.get("nodeNameKey").and_then(|v| v.as_str()) {
+                                name = resolver.get_skill_name_bypassing(node_name_key); // I will create this resolver method
+                            }
+                        }
+
+                        let max_pts = node_data.get("maxPoints").and_then(|v| v.as_u64()).unwrap_or(0);
+                        
+                        writeln!(file, "  - ID: Node_{}", node_id_str)?;
+                        writeln!(file, "    Name: \"{}\"", name)?;
+                        writeln!(file, "    AllocatedPoints: {}", p)?;
+                        writeln!(file, "    MaxPoints: {}", max_pts)?;
+                        
+                        let mut reqs = Vec::new();
+                        let mastery_req = node_data.get("masteryRequirement").and_then(|v| v.as_u64()).unwrap_or(0);
+                        if mastery_req > 0 {
+                            reqs.push(format!("Requires {} points in mastery", mastery_req));
+                        }
+                        if let Some(r_arr) = node_data.get("requirements").and_then(|v| v.as_array()) {
+                            for r in r_arr {
+                                if let Some(r_id) = r.get("nodeId").and_then(|v| v.as_u64()) {
+                                    let req_pts = r.get("requirement").and_then(|v| v.as_u64()).unwrap_or(0);
+                                    reqs.push(format!("Requires {} pts in Node {}", req_pts, r_id));
+                                }
+                            }
+                        }
+                        
+                        let mut scaling = Vec::new();
+                        let mut breakpoints = Vec::new();
+
+                        if let Some(stats) = node_data.get("stats").and_then(|v| v.as_array()) {
+                            for stat in stats {
+                                let no_scaling = stat.get("noScaling").and_then(|v| v.as_bool()).unwrap_or(false);
+                                let val = stat.get("value").and_then(|v| v.as_str()).unwrap_or("?");
+                                let mut effect_desc = format!("{} to property #{}", val, stat.get("property").and_then(|v| v.as_u64()).unwrap_or(0));
+                                
+                                if let Some(stat_key) = stat.get("statNameKey").and_then(|v| v.as_str()) {
+                                    let resolved_stat = resolver.get_skill_name_bypassing(stat_key);
+                                    effect_desc = format!("{} [{}]", val, resolved_stat);
+                                }
+                                
+                                if no_scaling {
+                                    let threshold = stat.get("noScalingPointThreshold").and_then(|v| v.as_u64()).or_else(|| node_data.get("noScalingPointThreshold").and_then(|v| v.as_u64())).unwrap_or(max_pts);
+                                    breakpoints.push(format!("At {} pts: {}", threshold, effect_desc));
+                                } else {
+                                    scaling.push(format!("{} per point", effect_desc));
+                                }
+                            }
+                        }
+
+                        if !reqs.is_empty() {
+                            writeln!(file, "    Requirements: {:?}", reqs)?;
+                        } else {
+                            writeln!(file, "    Requirements: []")?;
+                        }
+                        if !scaling.is_empty() {
+                            writeln!(file, "    ScalingEffects:")?;
+                            for sc in &scaling { writeln!(file, "      - \"{}\"", sc)?; }
+                        }
+                        if !breakpoints.is_empty() {
+                            writeln!(file, "    Breakpoints:")?;
+                            for br in &breakpoints { writeln!(file, "      - \"{}\"", br)?; }
+                        }
+                        writeln!(file, "")?;
                     }
-                } else {
-                     writeln!(file, "  - Node {} (Points: {})", node_id_str, points)?;
+                }
+            }
+        } else {
+            // fallback
+            if let Some(selected) = selected_pts {
+                for (node_id_str, points) in selected {
+                    writeln!(file, "  - Node {} (Points: {})", node_id_str, points)?;
                 }
             }
         }
