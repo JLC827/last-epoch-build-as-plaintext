@@ -80,7 +80,11 @@ pub fn run() -> Result<()> {
     println!("Extracting translations...");
     let translation_script = r#"
         (async () => {
-            const version = 'version135';
+            let version = 'version140';
+            const match = document.documentElement.innerHTML.match(/\/data\/(version[^/]+)\//);
+            if (match) {
+                version = match[1];
+            }
             const results = {};
             
             try {
@@ -588,9 +592,10 @@ fn write_equipment(file: &mut File, json: &Value, resolver: &Resolver) -> Result
                     writeln!(file, "  Item: {}", item_name)?;
                 }
                 
+                let mut ir: Vec<u8> = Vec::new();
                 let mut is_unique = false;
                 if let Some(ir_arr) = item.get("ir").and_then(|v| v.as_array()) {
-                    let ir: Vec<u8> = ir_arr.iter().map(|v| v.as_u64().unwrap_or(0) as u8).collect();
+                    ir = ir_arr.iter().map(|v| v.as_u64().unwrap_or(0) as u8).collect();
                     let unique_details = resolver.get_unique_detail(id, &ir);
                     
                     if !unique_details.is_empty() {
@@ -603,7 +608,7 @@ fn write_equipment(file: &mut File, json: &Value, resolver: &Resolver) -> Result
                 }
 
                 if !is_unique {
-                    let implicits = resolver.get_item_implicits(id);
+                    let implicits = resolver.get_item_implicits(id, &ir);
                     if !implicits.is_empty() {
                          writeln!(file, "  Implicits: {}", implicits)?;
                     }
@@ -712,10 +717,14 @@ fn write_blessings(file: &mut File, json: &Value, resolver: &Resolver) -> Result
                 }
                 
                 if let Some(id) = blessing.get("id").and_then(|v| v.as_str()) {
+                    let mut ir: Vec<u8> = Vec::new();
+                    if let Some(ir_arr) = blessing.get("ir").and_then(|v| v.as_array()) {
+                        ir = ir_arr.iter().map(|v| v.as_u64().unwrap_or(0) as u8).collect();
+                    }
                     let name = resolver.get_item_name(id);
                     writeln!(file, "{}: {}", timeline_name, name)?;
                     
-                    let implicits = resolver.get_item_implicits(id);
+                    let implicits = resolver.get_item_implicits(id, &ir);
                     if !implicits.is_empty() {
                         writeln!(file, "  - {}", implicits)?;
                     }

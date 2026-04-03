@@ -572,24 +572,36 @@ impl Resolver {
         if let Some(data) = self.unique_data_map.get(id) {
             // Base Implicits
             if let Some(base_data) = self.base_item_map.get(&(data.base_type_id, data.sub_type_id)) {
-                for imp in &base_data.implicits {
-                    let prop_name = if imp.property_id == 98 {
-                        self.player_property_map.get(&imp.tags).map(|s| s.as_str()).unwrap_or("Unknown Player Property")
-                    } else {
-                        self.property_map.get(&imp.property_id).map(|s| s.as_str()).unwrap_or("Unknown Property")
-                    };
+                for (i, imp) in base_data.implicits.iter().enumerate() {
+                    let prop_name = self.get_property_name(imp.property_id, imp.tags);
                     let RollData { min, max } = RollData { min: imp.value, max: imp.max_value };
                     
-                    let (min_s, max_s) = if min.abs() < 2.0 && min != 0.0 {
-                        (format!("{:.0}%", min * 100.0), format!("{:.0}%", max * 100.0))
+                    let roll_val = if i < ir.len() {
+                        ir[i] as f32
                     } else {
-                        (format!("{:.0}", min), format!("{:.0}", max))
+                        0.0 // Default to min if missing
+                    };
+                    
+                    let val = min + (max - min) * (roll_val / 255.0);
+                    
+                    let (val_s, min_s, max_s) = if min.abs() < 2.0 && min != 0.0 {
+                        (
+                            format!("{:.0}%", val * 100.0),
+                            format!("{:.0}%", min * 100.0),
+                            format!("{:.0}%", max * 100.0)
+                        )
+                    } else {
+                        (
+                            format!("{:.0}", val),
+                            format!("{:.0}", min),
+                            format!("{:.0}", max)
+                        )
                     };
 
                     if min == max {
                         details.push(format!("{} {}", min_s, prop_name));
                     } else {
-                        details.push(format!("{}-{} {}", min_s, max_s, prop_name));
+                        details.push(format!("{} ({}-{}) {}", val_s, min_s, max_s, prop_name));
                     }
                 }
             }
@@ -599,11 +611,7 @@ impl Resolver {
                 if m.hide_in_tooltip {
                     continue;
                 }
-                let prop_name = if m.property_id == 98 {
-                    self.player_property_map.get(&m.tags).map(|s| s.as_str()).unwrap_or("Unknown Player Property")
-                } else {
-                    self.property_map.get(&m.property_id).map(|s| s.as_str()).unwrap_or("Unknown Property")
-                };
+                let prop_name = self.get_property_name(m.property_id, m.tags);
                 
                 if !m.can_roll {
                     let val = m.value;
@@ -655,29 +663,41 @@ impl Resolver {
         details
     }
 
-    pub fn get_item_implicits(&self, id: &str) -> String {
+    pub fn get_item_implicits(&self, id: &str, ir: &[u8]) -> String {
         if let Some(data) = self.item_data_map.get(id) {
             let mut parts = Vec::new();
-            for imp in &data.implicits {
-                let prop_name = if imp.property_id == 98 {
-                    self.player_property_map.get(&imp.tags).map(|s| s.as_str()).unwrap_or("Unknown Player Property")
-                } else {
-                    self.property_map.get(&imp.property_id).map(|s| s.as_str()).unwrap_or("Unknown Property")
-                };
+            for (i, imp) in data.implicits.iter().enumerate() {
+                let prop_name = self.get_property_name(imp.property_id, imp.tags);
                 
                 let min = imp.value;
                 let max = imp.max_value;
                 
-                let (min_s, max_s) = if min.abs() < 2.0 && min != 0.0 {
-                    (format!("{:.0}%", min * 100.0), format!("{:.0}%", max * 100.0))
+                let roll_val = if i < ir.len() {
+                    ir[i] as f32
                 } else {
-                    (format!("{:.0}", min), format!("{:.0}", max))
+                    0.0 // Default to min if missing
+                };
+                
+                let val = min + (max - min) * (roll_val / 255.0);
+                
+                let (val_s, min_s, max_s) = if min.abs() < 2.0 && min != 0.0 {
+                    (
+                        format!("{:.0}%", val * 100.0),
+                        format!("{:.0}%", min * 100.0),
+                        format!("{:.0}%", max * 100.0)
+                    )
+                } else {
+                    (
+                        format!("{:.0}", val),
+                        format!("{:.0}", min),
+                        format!("{:.0}", max)
+                    )
                 };
 
                 if min == max {
                     parts.push(format!("{} {}", min_s, prop_name));
                 } else {
-                    parts.push(format!("{}-{} {}", min_s, max_s, prop_name));
+                    parts.push(format!("{} ({}-{}) {}", val_s, min_s, max_s, prop_name));
                 }
             }
             return parts.join(", ");
@@ -725,6 +745,17 @@ impl Resolver {
             return self.clean_html(trans);
         }
         "".to_string()
+    }
+
+    pub fn get_property_name(&self, property_id: u32, tags: u32) -> String {
+        if property_id == 98 {
+            self.player_property_map.get(&tags).map(|s| s.clone()).unwrap_or_else(|| "Unknown Player Property".to_string())
+        } else if property_id == 130 {
+            let key = format!("Properties.Property_IdolAltar_{}_Name", tags);
+            self.translations.get(&key).map(|s| s.clone()).unwrap_or_else(|| "Unknown Idol Altar Property".to_string())
+        } else {
+            self.property_map.get(&property_id).map(|s| s.clone()).unwrap_or_else(|| "Unknown Property".to_string())
+        }
     }
 
     fn clean_html(&self, input: &str) -> String {
