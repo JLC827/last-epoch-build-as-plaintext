@@ -13,16 +13,22 @@ use resolver::Resolver;
 #[command(author, version, about, long_about = None)]
 pub struct Args {
     /// URL of the build planner to scrape
-    #[arg(short, long, default_value = "https://www.lastepochtools.com/planner/AL0aE1k4")]
+    #[arg(short, long)]
     pub url: String,
 
     /// Output file path
-    #[arg(short, long, default_value = "build_data.txt")]
-    pub output: String,
+    #[arg(short, long)]
+    pub output: Option<String>,
 }
 
 pub fn run() -> Result<()> {
     let args = Args::parse();
+
+    let output_file_path = args.output.unwrap_or_else(|| {
+        let parts = args.url.trim_end_matches('/').split('/');
+        let name = parts.last().unwrap_or("build_data");
+        format!("{}.txt", name)
+    });
 
     println!("Scraping URL: {}", args.url);
     
@@ -164,9 +170,11 @@ pub fn run() -> Result<()> {
     println!("Initializing data resolver...");
     let resolver = Resolver::new()?;
 
-    let mut file = File::create(&args.output)?;
+    let mut file = File::create(&output_file_path)?;
     writeln!(file, "Build Data for {}\n", args.url)?;
     
+    write_character_info(&mut file, &build_json)?;
+
     writeln!(file, "--- Character Stats ---")?;
     write_stats(&mut file, &build_json)?;
     
@@ -177,7 +185,7 @@ pub fn run() -> Result<()> {
     writeln!(file, "\n--- Equipment ---")?;
     write_equipment(&mut file, &build_json, &resolver)?;
 
-    println!("Data saved to {}", args.output);
+    println!("Data saved to {}", output_file_path);
 
     Ok(())
 }
@@ -213,6 +221,58 @@ fn extract_build_info(tab: &headless_chrome::Tab) -> Result<String> {
     } else {
         Ok(value.to_string())
     }
+}
+
+fn write_character_info(file: &mut File, json: &Value) -> Result<()> {
+    let mut name = "N/A".to_string();
+    let mut class_id: Option<u8> = None;
+    let mut mastery_id: Option<u8> = None;
+    let mut level: Option<u64> = None;
+
+    if let Some(bio) = json.get("data").and_then(|d| d.get("bio")) {
+        class_id = bio.get("characterClass").and_then(|v| v.as_u64()).map(|v| v as u8);
+        mastery_id = bio.get("chosenMastery").and_then(|v| v.as_u64()).map(|v| v as u8);
+        level = bio.get("level").and_then(|v| v.as_u64());
+        if let Some(n) = bio.get("name").and_then(|v| v.as_str()) {
+            name = n.to_string();
+        }
+    }
+
+    let class_name = match class_id {
+        Some(0) => "Primalist",
+        Some(1) => "Mage",
+        Some(2) => "Sentinel",
+        Some(3) => "Acolyte",
+        Some(4) => "Rogue",
+        _ => "Unknown Class",
+    };
+
+    let mastery_name = match (class_id, mastery_id) {
+        (Some(0), Some(1)) => "Beastmaster",
+        (Some(0), Some(2)) => "Shaman",
+        (Some(0), Some(3)) => "Druid",
+        (Some(1), Some(1)) => "Sorcerer",
+        (Some(1), Some(2)) => "Spellblade",
+        (Some(1), Some(3)) => "Runemaster",
+        (Some(2), Some(1)) => "Void Knight",
+        (Some(2), Some(2)) => "Forge Guard",
+        (Some(2), Some(3)) => "Paladin",
+        (Some(3), Some(1)) => "Lich",
+        (Some(3), Some(2)) => "Necromancer",
+        (Some(3), Some(3)) => "Warlock",
+        (Some(4), Some(1)) => "Bladedancer",
+        (Some(4), Some(2)) => "Marksman",
+        (Some(4), Some(3)) => "Falconer",
+        _ => "Base Class",
+    };
+
+    let level_str = level.map_or("N/A".to_string(), |l| l.to_string());
+    writeln!(file, "Name: {}", name)?;
+    writeln!(file, "Level: {}", level_str)?;
+    writeln!(file, "Class: {}", class_name)?;
+    writeln!(file, "Mastery: {}\n", mastery_name)?;
+
+    Ok(())
 }
 
 fn write_stats(file: &mut File, json: &Value) -> Result<()> {
@@ -335,7 +395,11 @@ fn write_equipment(file: &mut File, json: &Value, resolver: &Resolver) -> Result
             writeln!(file, "Slot: {}", slot)?;
             if let Some(id) = item.get("id").and_then(|v| v.as_str()) {
                 let item_name = resolver.get_item_name(id);
-                writeln!(file, "  Item: {}", item_name)?;
+                if let Some(type_name) = resolver.get_item_type_name(id) {
+                    writeln!(file, "  Item: {} ({})", item_name, type_name)?;
+                } else {
+                    writeln!(file, "  Item: {}", item_name)?;
+                }
                 
                 let mut is_unique = false;
                 if let Some(ir_arr) = item.get("ir").and_then(|v| v.as_array()) {

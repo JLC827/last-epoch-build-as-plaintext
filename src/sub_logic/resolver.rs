@@ -14,6 +14,8 @@ pub struct Resolver {
     unique_map: HashMap<String, String>,
     unique_data_map: HashMap<String, UniqueData>,
     property_map: HashMap<u32, String>,
+    player_property_map: HashMap<u32, String>,
+    base_type_name_map: HashMap<u32, String>,
 }
 
 #[derive(Debug)]
@@ -36,7 +38,7 @@ struct UniqueMod {
 #[derive(Debug)]
 struct AffixData {
     display_name_key: String,
-    properties: Vec<u32>,
+    properties: Vec<String>,
     tiers: Vec<TierData>,
 }
 
@@ -60,13 +62,13 @@ struct AbilityData {
 
 #[derive(Debug, Clone)]
 struct ItemData {
+    base_type_id: u32,
     implicits: Vec<ImplicitData>,
 }
 
 #[derive(Debug, Clone)]
 struct ImplicitData {
-    property_id: u32,
-    value: f32,
+    property_id: u32,    tags: u32,    value: f32,
     max_value: f32,
 }
 
@@ -82,6 +84,8 @@ impl Resolver {
             unique_map: HashMap::new(),
             unique_data_map: HashMap::new(),
             property_map: Self::init_property_map(),
+            player_property_map: HashMap::new(),
+            base_type_name_map: HashMap::new(),
         };
 
         resolver.load_translations("translations.json")?;
@@ -110,6 +114,19 @@ impl Resolver {
                             }
                         }
                     }
+                }
+            }
+
+            if let Some(list) = json.get("playerPropertyList").and_then(|v| v.as_array()) {
+                for (i, item) in list.iter().enumerate() {
+                     if let Some(key) = item.get("propertyNameKey").and_then(|v| v.as_str()) {
+                        let id = i as u32;
+                        if let Some(trans) = self.translations.get(key) {
+                            self.player_property_map.insert(id, trans.clone());
+                        } else {
+                            self.player_property_map.insert(id, key.to_string());
+                        }
+                     }
                 }
             }
         }
@@ -279,6 +296,13 @@ impl Resolver {
                         for (base_type_key, base_type_val) in cat_obj {
                             let base_type_id = base_type_key.parse::<u32>().unwrap_or(0);
                             
+                            // Extract base type name map
+                            if let Some(display_name_key) = base_type_val.get("displayNameKey").and_then(|v| v.as_str()) {
+                                if let Some(translated_name) = self.translations.get(display_name_key) {
+                                    self.base_type_name_map.insert(base_type_id, translated_name.clone());
+                                }
+                            }
+                            
                             if let Some(sub_items) = base_type_val.get("subItems").and_then(|v| v.as_array()) {
                                 for sub_item_val in sub_items {
                                     if let Some(id) = sub_item_val.get("id").and_then(|v| v.as_str()) {
@@ -291,14 +315,11 @@ impl Resolver {
                                                 let prop = imp.get("property").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                                                 let val = imp.get("implicitValue").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
                                                 let max_val = imp.get("implicitMaxValue").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-                                                implicits.push(ImplicitData {
-                                                    property_id: prop,
-                                                    value: val,
-                                                    max_value: max_val,
-                                                });
+                                                let tag_val = imp.get("tags").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                                                implicits.push(ImplicitData { property_id: prop, tags: tag_val, value: val, max_value: max_val });
                                             }
                                         }
-                                        let item_data = ItemData { implicits };
+                                        let item_data = ItemData { implicits, base_type_id };
                                         self.item_data_map.insert(id.to_string(), item_data.clone());
                                         
                                         let sub_type_id = id.parse::<u32>().unwrap_or(0);
@@ -318,14 +339,11 @@ impl Resolver {
                                                 let prop = imp.get("property").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                                                 let val = imp.get("implicitValue").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
                                                 let max_val = imp.get("implicitMaxValue").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-                                                implicits.push(ImplicitData {
-                                                    property_id: prop,
-                                                    value: val,
-                                                    max_value: max_val,
-                                                });
+                                                let tag_val = imp.get("tags").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                                                implicits.push(ImplicitData { property_id: prop, tags: tag_val, value: val, max_value: max_val });
                                             }
                                         }
-                                        let item_data = ItemData { implicits };
+                                        let item_data = ItemData { implicits, base_type_id };
                                         self.item_data_map.insert(id.to_string(), item_data.clone());
                                         
                                         let sub_type_id = id.parse::<u32>().unwrap_or(0);
@@ -415,8 +433,11 @@ impl Resolver {
                                 let mut properties = Vec::new();
                                 if let Some(props) = obj.get("affixProperties").and_then(|v| v.as_array()) {
                                     for p in props {
-                                        let pid = p.get("property").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                                        properties.push(pid);
+                                        let key = p.get("modDisplayNameKey")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("")
+                                            .to_string();
+                                        properties.push(key);
                                     }
                                 }
 
@@ -497,8 +518,9 @@ impl Resolver {
             if let Some(tier_data) = data.tiers.get(tier_idx) {
                 let mut parts = Vec::new();
                 for (i, roll_data) in tier_data.rolls.iter().enumerate() {
-                    let prop_id = data.properties.get(i).unwrap_or(&0);
-                    let prop_name = self.property_map.get(prop_id).map(|s| s.as_str()).unwrap_or("Unknown Property");
+                    let default_key = String::new();
+                    let prop_key = data.properties.get(i).unwrap_or(&default_key);
+                    let prop_name = self.translations.get(prop_key).map(|s| s.as_str()).unwrap_or("Unknown Property");
                     
                     let val = roll_data.min + (roll_data.max - roll_data.min) * (roll / 255.0);
                     
@@ -516,7 +538,6 @@ impl Resolver {
                         )
                     };
 
-                    let affix_name = self.get_affix_name(id);
                     if roll_data.min == roll_data.max {
                          parts.push(format!("[T{}] +{} {}", tier, val_s, prop_name));
                     } else {
@@ -535,10 +556,13 @@ impl Resolver {
         if let Some(data) = self.unique_data_map.get(id) {
             // Base Implicits
             if let Some(base_data) = self.base_item_map.get(&(data.base_type_id, data.sub_type_id)) {
-                for imp in &base_data.implicits {
-                    let prop_name = self.property_map.get(&imp.property_id).map(|s| s.as_str()).unwrap_or("Unknown");
-                    let min = imp.value;
-                    let max = imp.max_value;
+                for (i, imp) in base_data.implicits.iter().enumerate() {
+                    let prop_name = if imp.property_id == 98 {
+                        self.player_property_map.get(&imp.tags).map(|s| s.as_str()).unwrap_or("Unknown Player Property")
+                    } else {
+                        self.property_map.get(&imp.property_id).map(|s| s.as_str()).unwrap_or("Unknown Property")
+                    };
+                    let RollData { min, max } = RollData { min: imp.value, max: imp.max_value };
                     
                     let (min_s, max_s) = if min.abs() < 2.0 && min != 0.0 {
                         (format!("{:.0}%", min * 100.0), format!("{:.0}%", max * 100.0))
@@ -612,7 +636,11 @@ impl Resolver {
         if let Some(data) = self.item_data_map.get(id) {
             let mut parts = Vec::new();
             for imp in &data.implicits {
-                let prop_name = self.property_map.get(&imp.property_id).map(|s| s.as_str()).unwrap_or("Unknown");
+                let prop_name = if imp.property_id == 98 {
+                    self.player_property_map.get(&imp.tags).map(|s| s.as_str()).unwrap_or("Unknown Player Property")
+                } else {
+                    self.property_map.get(&imp.property_id).map(|s| s.as_str()).unwrap_or("Unknown Property")
+                };
                 
                 let min = imp.value;
                 let max = imp.max_value;
@@ -751,4 +779,19 @@ impl Resolver {
         }
         id.to_string()
     }
+
+    pub fn get_base_type_name(&self, base_type_id: u32) -> Option<&String> {
+        self.base_type_name_map.get(&base_type_id)
+    }
+
+    pub fn get_item_type_name(&self, id: &str) -> Option<String> {
+        if let Some(unique_data) = self.unique_data_map.get(id) {
+            return self.get_base_type_name(unique_data.base_type_id).cloned();
+        }
+        if let Some(item_data) = self.item_data_map.get(id) {
+            return self.get_base_type_name(item_data.base_type_id).cloned();
+        }
+        None
+    }
 }
+

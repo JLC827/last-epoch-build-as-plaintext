@@ -1,14 +1,18 @@
 # Copilot / AI Agent Instructions — letools_scraper
 
 Purpose
-This rust project is a web scraper to extract stats, builds, and equipment data from Last Epoch Tools. LE Tools is a popular third-party website for the game Last Epoch that provides a build planner and item database, as well as builds. It is a single page application built with React, that dynamically loads content via JavaScript. Use headless chromium to render the pages and extract the relevant data, and output the data to a plaintext file.
+This rust project is a web scraper to extract stats, builds, and equipment data from Last Epoch Tools. The goal is to get the output in plaintex format, which can be used with an LLM to help analyze and optimise builds.
+
+LE Tools is a popular third-party website for the game Last Epoch that provides a build planner and item database, as well as builds. It is a single page application built with React, that dynamically loads content via JavaScript. 
+
+Use headless chromium to render the pages and extract the relevant data, and output the data to a plaintext file.
 
 The output should include the following features:
 Character Stats Extraction: Extract character stats such as level, class, attributes (strength, dexterity, intelligence, vitality), resistances, and other relevant stats displayed on the build planner page.
 Skills and Passives Extraction: Extract information about the skills and passive skills selected in the build planner, including skill levels, nodes chosen in the passive skill tree, and any modifiers applied to skills.
 Equipment Extraction: Extract details about the equipment items equipped on the character, including item names, types, rarities, affixes, and any special properties or effects.
 
-Use https://www.lastepochtools.com/planner/AL0aE1k4 as a test url for generating and validating the scraper output.
+Use https://www.lastepochtools.com/planner/BZ3ZagqY as a test url for generating and validating the scraper output.
 
 
 Coding requirements:
@@ -83,7 +87,7 @@ fn main() {
 ## How the Code Works
 The project uses the `headless_chrome` crate to automate a browser instance.
 1.  **Initialization**: Launches a headless Chrome browser with specific flags to avoid detection and handle the environment.
-2.  **Navigation**: Navigates to the target Build Planner URL (e.g., `https://www.lastepochtools.com/planner/AL0aE1k4`).
+2.  **Navigation**: Navigates to the target Build Planner URL (e.g., `https://www.lastepochtools.com/planner/BZ3ZagqY`).
 3.  **Rendering**: Waits for the page to load and sleeps for a few seconds to ensure the React application has fully rendered and hydrated the state.
 4.  **Data Extraction**:
     *   **Global Objects**: Injects JavaScript to serialize and extract global window objects like `window.le_`, `window.LEAbilities`, `window.coreDB`, `window.itemDB`, and `window.buildInfo`.
@@ -118,11 +122,13 @@ The scraper extracts two categories of data:
 ### Commands
 1.  **Run the Main Scraper**:
     ```powershell
-    # Run with default URL (https://www.lastepochtools.com/planner/AL0aE1k4)
-    cargo run
+    # Run by specifying the URL (Generates `<url-id>.txt` automatically)
+    cargo run -- --url "https://www.lastepochtools.com/planner/BZ3ZagqY"
 
-    # Run with custom URL and output file
-    cargo run -- --url "https://www.lastepochtools.com/planner/AnotherBuild" --output "my_build.txt"
+    This will produce a plaintext file e.g. `BZ3ZagqY.txt` with the extracted build data, as well as several JSON files containing raw dumps of the app's internal state and translations for debugging and reference.
+
+    # Use this URL for testing against known properties:
+    # https://www.lastepochtools.com/planner/BZ3ZagqY
     ```
 
 2.  **Run the JSON Inspector**:
