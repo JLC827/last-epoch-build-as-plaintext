@@ -368,9 +368,9 @@ fn write_skills(file: &mut File, json: &Value, resolver: &Resolver) -> Result<()
                                 writeln!(file, "    AllocatedPoints: {}", points)?;
                                 writeln!(file, "    MaxPoints: {}", max_pts)?;
                                 if !reqs.is_empty() {
-                                    writeln!(file, "    Requirements: {:?}", reqs)?;
+                                    writeln!(file, "    Requirements: \"{}\"", reqs.join(", "))?;
                                 } else {
-                                    writeln!(file, "    Requirements: []")?;
+                                    writeln!(file, "    Requirements: None")?;
                                 }
                                 
                                 // Print description
@@ -495,9 +495,9 @@ fn write_passives(file: &mut File, json: &Value, resolver: &Resolver) -> Result<
                         }
 
                         if !reqs.is_empty() {
-                            writeln!(file, "    Requirements: {:?}", reqs)?;
+                            writeln!(file, "    Requirements: \"{}\"", reqs.join(", "))?;
                         } else {
-                            writeln!(file, "    Requirements: []")?;
+                            writeln!(file, "    Requirements: None")?;
                         }
                         if !scaling.is_empty() {
                             writeln!(file, "    ScalingEffects:")?;
