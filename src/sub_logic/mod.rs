@@ -582,6 +582,10 @@ fn write_equipment(file: &mut File, json: &Value, resolver: &Resolver) -> Result
                     writeln!(file, "  Item: {}", item_name)?;
                 }
                 
+                if let Some(fp) = item.get("fp").and_then(|v| v.as_u64()).or_else(|| item.get("forgingPotential").and_then(|v| v.as_u64())) {
+                    writeln!(file, "  Forging Potential: {}", fp)?;
+                }
+
                 let mut is_unique = false;
                 if let Some(ir_arr) = item.get("ir").and_then(|v| v.as_array()) {
                     let ir: Vec<u8> = ir_arr.iter().map(|v| v.as_u64().unwrap_or(0) as u8).collect();
@@ -603,19 +607,32 @@ fn write_equipment(file: &mut File, json: &Value, resolver: &Resolver) -> Result
                     }
                 }
             }
-            if let Some(affixes) = item.get("affixes").and_then(|a| a.as_array()) {
+            let mut affixes_to_write = Vec::new();
+            if let Some(arr) = item.get("affixes").and_then(|a| a.as_array()) {
+                for affix in arr {
+                    affixes_to_write.push((affix, ""));
+                }
+            }
+            if let Some(sealed) = item.get("sealedAffix") {
+                affixes_to_write.push((sealed, " (Sealed)"));
+            }
+            if let Some(corrupted) = item.get("corruptedAffix") {
+                affixes_to_write.push((corrupted, " (Experimental)"));
+            }
+
+            if !affixes_to_write.is_empty() {
                 writeln!(file, "  Affixes:")?;
-                for affix in affixes {
+                for (affix, tag) in &affixes_to_write {
                     if let Some(id_str) = affix.get("id").and_then(|v| v.as_str()) {
                         let tier = affix.get("tier").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
                         let roll = affix.get("r").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
                         
                         let detail = resolver.get_affix_detail(id_str, tier, roll);
                         if !detail.is_empty() {
-                            writeln!(file, "    - {}", detail)?;
+                            writeln!(file, "    - {}{}", detail, tag)?;
                         } else {
                              let name = resolver.get_affix_name(id_str);
-                             writeln!(file, "    - [T{}] {}", tier, name)?;
+                             writeln!(file, "    - [T{}]{} {}", tier, tag, name)?;
                         }
                     }
                 }

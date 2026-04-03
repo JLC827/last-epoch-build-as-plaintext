@@ -123,12 +123,12 @@ The scraper extracts two categories of data:
 1.  **Run the Main Scraper**:
     ```powershell
     # Run by specifying the URL (Generates `<url-id>.txt` automatically)
-    cargo run -- --url "https://www.lastepochtools.com/planner/BZ3ZagqY"
+    cargo run -- --url "https://www.lastepochtools.com/planner/QdzJvw1K"
 
     This will produce a plaintext file e.g. `BZ3ZagqY.txt` with the extracted build data, as well as several JSON files containing raw dumps of the app's internal state and translations for debugging and reference.
 
     # Use this URL for testing against known properties:
-    # https://www.lastepochtools.com/planner/BZ3ZagqY
+    # https://www.lastepochtools.com/planner/QdzJvw1K
     ```
 
 2.  **Run the JSON Inspector**:
