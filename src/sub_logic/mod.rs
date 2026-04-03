@@ -176,6 +176,12 @@ pub fn run() -> Result<()> {
     writeln!(file, "\n--- Equipment ---")?;
     write_equipment(&mut file, &build_json, &resolver)?;
 
+    writeln!(file, "\n--- Idols ---")?;
+    write_idols(&mut file, &build_json, &resolver)?;
+    
+    writeln!(file, "\n--- Blessings ---")?;
+    write_blessings(&mut file, &build_json, &resolver)?;
+
     println!("Data saved to {}", output_file_path);
 
     Ok(())
@@ -638,5 +644,91 @@ fn write_equipment(file: &mut File, json: &Value, resolver: &Resolver) -> Result
     } else {
         writeln!(file, "No equipment data found.")?;
     }
+    Ok(())
+}
+
+fn write_idols(file: &mut File, json: &Value, resolver: &Resolver) -> Result<()> {
+    if let Some(idols) = json.get("data").and_then(|d| d.get("idols").and_then(|i| i.as_array())) {
+        if idols.is_empty() {
+            writeln!(file, "No idols equipped in the Idol Altar.")?;
+            return Ok(());
+        }
+        
+        for (idx, idol) in idols.iter().enumerate() {
+            if let Some(id) = idol.get("id").and_then(|v| v.as_str()) {
+                let name = resolver.get_item_name(id);
+                if let Some(type_name) = resolver.get_item_type_name(id) {
+                    writeln!(file, "Slot {}: {} ({})", idx + 1, name, type_name)?;
+                } else {
+                    writeln!(file, "Slot {}: {}", idx + 1, name)?;
+                }
+                
+                if let Some(affixes) = idol.get("affixes").and_then(|a| a.as_array()) {
+                    for affix in affixes {
+                        if let Some(aff_id) = affix.get("id").and_then(|a| a.as_str()) {
+                            let tier = affix.get("tier").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
+                            let roll = affix.get("r").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                            let detail = resolver.get_affix_detail(aff_id, tier, roll);
+                            if !detail.is_empty() {
+                                writeln!(file, "    - {}", detail)?;
+                            } else {
+                                let aff_name = resolver.get_affix_name(aff_id);
+                                writeln!(file, "    - [T{}] {}", tier, aff_name)?;
+                            }
+                        }
+                    }
+                }
+                writeln!(file, "")?;
+            }
+        }
+    } else {
+        writeln!(file, "No idols data found.")?;
+    }
+    Ok(())
+}
+
+fn write_blessings(file: &mut File, json: &Value, resolver: &Resolver) -> Result<()> {
+    const TIMELINES: [&str; 10] = [
+        "Fall of the Outcasts",
+        "The Stolen Lance",
+        "The Black Sun",
+        "Blood, Frost, and Death",
+        "Fall of the Empire",
+        "Ending the Storm",
+        "Reign of Dragons",
+        "Spirits of Fire",
+        "Age of Winter",
+        "The Last Ruin",
+    ];
+
+    if let Some(blessings) = json.get("data").and_then(|d| d.get("blessings").and_then(|b| b.as_object())) {
+        for i in 1..=10 {
+            let key = i.to_string();
+            let timeline_name = TIMELINES[i - 1];
+            if let Some(blessing) = blessings.get(&key) {
+                if blessing.is_null() || blessing.as_object().is_none() {
+                    writeln!(file, "{}: No Blessing", timeline_name)?;
+                    continue;
+                }
+                
+                if let Some(id) = blessing.get("id").and_then(|v| v.as_str()) {
+                    let name = resolver.get_item_name(id);
+                    writeln!(file, "{}: {}", timeline_name, name)?;
+                    
+                    let implicits = resolver.get_item_implicits(id);
+                    if !implicits.is_empty() {
+                        writeln!(file, "  - {}", implicits)?;
+                    }
+                } else {
+                    writeln!(file, "{}: No Blessing", timeline_name)?;
+                }
+            } else {
+                writeln!(file, "{}: No Blessing", timeline_name)?;
+            }
+        }
+    } else {
+         writeln!(file, "No blessings data found.")?;
+    }
+    
     Ok(())
 }
