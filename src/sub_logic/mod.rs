@@ -358,13 +358,13 @@ fn write_skills(file: &mut File, json: &Value, resolver: &Resolver) -> Result<()
                                     for r in r_arr {
                                         if let Some(r_id) = r.get("nodeId").and_then(|v| v.as_u64()) {
                                             let req_pts = r.get("requirement").and_then(|v| v.as_u64()).unwrap_or(0);
-                                            reqs.push(format!("Requires {} pts in Node {}", req_pts, r_id));
+                                            let r_name = resolver.get_skill_node_name(id, &r_id.to_string());
+                                            reqs.push(format!("Requires {} pts in {}", req_pts, r_name));
                                         }
                                     }
                                 }
 
-                                writeln!(file, "  - ID: Node_{}", node_id_str)?;
-                                writeln!(file, "    Name: \"{}\"", node_name)?;
+                                writeln!(file, "  - Name: \"{}\"", node_name)?;
                                 writeln!(file, "    AllocatedPoints: {}", points)?;
                                 writeln!(file, "    MaxPoints: {}", max_pts)?;
                                 if !reqs.is_empty() {
@@ -399,6 +399,32 @@ fn write_skills(file: &mut File, json: &Value, resolver: &Resolver) -> Result<()
     Ok(())
 }
 
+fn get_mastery_name(class_id: u8, mastery_id: u64) -> &'static str {
+    match (class_id, mastery_id) {
+        (0, 0) => "Primalist",
+        (0, 1) => "Beastmaster",
+        (0, 2) => "Shaman",
+        (0, 3) => "Druid",
+        (1, 0) => "Mage",
+        (1, 1) => "Sorcerer",
+        (1, 2) => "Spellblade",
+        (1, 3) => "Runemaster",
+        (2, 0) => "Sentinel",
+        (2, 1) => "Void Knight",
+        (2, 2) => "Forge Guard",
+        (2, 3) => "Paladin",
+        (3, 0) => "Acolyte",
+        (3, 1) => "Necromancer",
+        (3, 2) => "Lich",
+        (3, 3) => "Warlock",
+        (4, 0) => "Rogue",
+        (4, 1) => "Bladedancer",
+        (4, 2) => "Marksman",
+        (4, 3) => "Falconer",
+        _ => "Unknown Category",
+    }
+}
+
 fn write_passives(file: &mut File, json: &Value, resolver: &Resolver) -> Result<()> {
     let class_id = json.get("data")
         .and_then(|d| d.get("bio"))
@@ -426,19 +452,31 @@ fn write_passives(file: &mut File, json: &Value, resolver: &Resolver) -> Result<
             .and_then(|n| n.as_object());
 
         if let Some(nodes) = nodes_obj {
-            let mut sorted_keys: Vec<_> = nodes.keys().collect();
-            sorted_keys.sort_by_key(|k| k.parse::<u32>().unwrap_or(0));
+            let mut mastery_groups: std::collections::HashMap<u64, Vec<&String>> = std::collections::HashMap::new();
+            
+            for (k, v) in nodes {
+                let m = v.get("mastery").and_then(|v| v.as_u64()).unwrap_or(0);
+                mastery_groups.entry(m).or_default().push(k);
+            }
 
-            for node_id_str in sorted_keys {
-                if let Some(node_data) = nodes.get(node_id_str) {
-                    let p = selected_pts
-                        .and_then(|s| s.get(node_id_str))
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0);
-                    
-                    if p == 0 { continue; } // Omit 0-point passives, as passive trees are too gigantic
+            let mut sorted_masteries: Vec<_> = mastery_groups.keys().copied().collect();
+            sorted_masteries.sort_unstable();
 
-                    if let Ok(node_id) = node_id_str.parse::<u8>() {
+            for mastery_id in sorted_masteries {
+                let group_name = get_mastery_name(class_id, mastery_id);
+                writeln!(file, "\n  [{}]", group_name)?;
+                
+                let mut keys = mastery_groups.get(&mastery_id).unwrap().clone();
+                keys.sort_by_key(|k| k.parse::<u32>().unwrap_or(0));
+
+                for node_id_str in keys {
+                    if let Some(node_data) = nodes.get(node_id_str) {
+                        let p = selected_pts
+                            .and_then(|s| s.get(node_id_str))
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
+
+                        if let Ok(node_id) = node_id_str.parse::<u8>() {
                         let mut name = resolver.get_passive_name(class_id, node_id);
                         if name.starts_with("Skills.") {
                             if let Some(node_name_key) = node_data.get("nodeNameKey").and_then(|v| v.as_str()) {
@@ -448,8 +486,7 @@ fn write_passives(file: &mut File, json: &Value, resolver: &Resolver) -> Result<
 
                         let max_pts = node_data.get("maxPoints").and_then(|v| v.as_u64()).unwrap_or(0);
                         
-                        writeln!(file, "  - ID: Node_{}", node_id_str)?;
-                        writeln!(file, "    Name: \"{}\"", name)?;
+                        writeln!(file, "  - Name: \"{}\"", name)?;
                         writeln!(file, "    AllocatedPoints: {}", p)?;
                         writeln!(file, "    MaxPoints: {}", max_pts)?;
                         
@@ -462,7 +499,16 @@ fn write_passives(file: &mut File, json: &Value, resolver: &Resolver) -> Result<
                             for r in r_arr {
                                 if let Some(r_id) = r.get("nodeId").and_then(|v| v.as_u64()) {
                                     let req_pts = r.get("requirement").and_then(|v| v.as_u64()).unwrap_or(0);
-                                    reqs.push(format!("Requires {} pts in Node {}", req_pts, r_id));
+                                    let mut r_name = format!("Node {}", r_id);
+                                    if let Some(req_node_data) = nodes.get(&r_id.to_string()) {
+                                        r_name = resolver.get_passive_name(class_id, r_id as u8);
+                                        if r_name.starts_with("Skills.") {
+                                            if let Some(node_name_key) = req_node_data.get("nodeNameKey").and_then(|v| v.as_str()) {
+                                                r_name = resolver.get_skill_name_bypassing(node_name_key);
+                                            }
+                                        }
+                                    }
+                                    reqs.push(format!("Requires {} pts in {}", req_pts, r_name));
                                 }
                             }
                         }
@@ -510,6 +556,7 @@ fn write_passives(file: &mut File, json: &Value, resolver: &Resolver) -> Result<
                         writeln!(file, "")?;
                     }
                 }
+            }
             }
         } else {
             // fallback

@@ -556,7 +556,7 @@ impl Resolver {
         if let Some(data) = self.unique_data_map.get(id) {
             // Base Implicits
             if let Some(base_data) = self.base_item_map.get(&(data.base_type_id, data.sub_type_id)) {
-                for (i, imp) in base_data.implicits.iter().enumerate() {
+                for imp in &base_data.implicits {
                     let prop_name = if imp.property_id == 98 {
                         self.player_property_map.get(&imp.tags).map(|s| s.as_str()).unwrap_or("Unknown Player Property")
                     } else {
@@ -758,6 +758,7 @@ impl Resolver {
         format!("Passive {}", node_id)
     }
 
+    #[allow(dead_code)]
     pub fn get_passive_description(&self, class_id: u8, node_id: u8) -> String {
         let prefix = match class_id {
             0 => "po",
