@@ -167,6 +167,7 @@ pub fn run() -> Result<()> {
 
     let mut file = File::create(&output_file_path)?;
     writeln!(file, "Build Data for {}\n", args.url)?;
+    writeln!(file, "Note: Any non-corrupted items may have forging potential left over (but may be limited by forging level limits), or are due for corrupting.\n")?;
     
     write_character_info(&mut file, &build_json)?;
 
