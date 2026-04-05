@@ -1,1 +1,10 @@
 /target
+
+/builds/
+/debug_data/
+/hashed_js/
+*.txt
+*.json
+*.html
+*.js
+!.github/

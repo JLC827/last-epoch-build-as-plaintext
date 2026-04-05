@@ -26,11 +26,15 @@ pub fn run() -> Result<()> {
     let output_file_path = args.output.unwrap_or_else(|| {
         let parts = args.url.trim_end_matches('/').split('/');
         let name = parts.last().unwrap_or("build_data");
-        format!("{}.txt", name)
+        format!("builds/{}.txt", name)
     });
 
     println!("Scraping URL: {}", args.url);
     
+    // Ensure output directories exist
+    std::fs::create_dir_all("builds").ok();
+    std::fs::create_dir_all("debug_data").ok();
+
     let browser = Browser::new(LaunchOptions {
         headless: true,
         window_size: Some((1920, 1080)),
@@ -61,7 +65,7 @@ pub fn run() -> Result<()> {
     let skill_trees_res = tab.evaluate("JSON.stringify(window.LESkillTrees || {})", false)?;
     if let Some(val) = skill_trees_res.value {
         if let Some(s) = val.as_str() {
-            std::fs::write("le_skill_trees.json", s)?;
+            std::fs::write("debug_data/le_skill_trees.json", s)?;
             println!("Saved le_skill_trees.json");
         }
     }
@@ -70,7 +74,7 @@ pub fn run() -> Result<()> {
     let char_trees_res = tab.evaluate("JSON.stringify(window.LECharTrees || {})", false)?;
     if let Some(val) = char_trees_res.value {
         if let Some(s) = val.as_str() {
-            std::fs::write("le_char_trees.json", s)?;
+            std::fs::write("debug_data/le_char_trees.json", s)?;
             println!("Saved le_char_trees.json");
         }
     }
@@ -112,7 +116,7 @@ pub fn run() -> Result<()> {
     let trans_res = tab.evaluate(translation_script, true)?;
     if let Some(val) = trans_res.value {
         if let Some(s) = val.as_str() {
-            let mut file = File::create("translations.json")?;
+            let mut file = File::create("debug_data/translations.json")?;
             file.write_all(s.as_bytes())?;
             println!("Saved translations.json");
         }
@@ -123,7 +127,7 @@ pub fn run() -> Result<()> {
     let abilities_res = tab.evaluate("JSON.stringify(window.LEAbilities || {})", false)?;
     if let Some(val) = abilities_res.value {
         if let Some(s) = val.as_str() {
-            let mut file = File::create("le_abilities.json")?;
+            let mut file = File::create("debug_data/le_abilities.json")?;
             file.write_all(s.as_bytes())?;
             println!("Saved le_abilities.json");
         }
@@ -134,7 +138,7 @@ pub fn run() -> Result<()> {
     let coredb_res = tab.evaluate("JSON.stringify(window.coreDB || {})", false)?;
     if let Some(val) = coredb_res.value {
         if let Some(s) = val.as_str() {
-            let mut file = File::create("core_db.json")?;
+            let mut file = File::create("debug_data/core_db.json")?;
             file.write_all(s.as_bytes())?;
             println!("Saved core_db.json");
         }
@@ -145,7 +149,7 @@ pub fn run() -> Result<()> {
     let itemdb_res = tab.evaluate("JSON.stringify(window.itemDB || {})", false)?;
     if let Some(val) = itemdb_res.value {
         if let Some(s) = val.as_str() {
-            let mut file = File::create("item_db.json")?;
+            let mut file = File::create("debug_data/item_db.json")?;
             file.write_all(s.as_bytes())?;
             println!("Saved item_db.json");
         }
@@ -154,7 +158,7 @@ pub fn run() -> Result<()> {
     let build_info = extract_build_info(&tab)?;
     
     // Save build_info.json for debugging
-    let mut file = File::create("build_info.json")?;
+    let mut file = File::create("debug_data/build_info.json")?;
     file.write_all(build_info.as_bytes())?;
     println!("Saved build_info.json");
 
@@ -166,7 +170,7 @@ pub fn run() -> Result<()> {
 
     let mut file = File::create(&output_file_path)?;
     writeln!(file, "Build Data for {}\n", args.url)?;
-    writeln!(file, "Note: Any non-corrupted items may have forging potential left over (but may be limited by forging level limits), or are due for corrupting.\n")?;
+    writeln!(file, "Note: Last Epoch tools does not report forging potential. Any non-corrupted items may have forging potential left over (but may be limited by forging level limits), or are due for corrupting.\n")?;
     
     write_character_info(&mut file, &build_json)?;
 
@@ -334,7 +338,7 @@ fn write_stats(file: &mut File, json: &Value) -> Result<()> {
 
 fn write_skills(file: &mut File, json: &Value, resolver: &Resolver) -> Result<()> {
     // Load full skill trees graph
-    let skill_trees_dump: Option<Value> = std::fs::read_to_string("le_skill_trees.json")
+    let skill_trees_dump: Option<Value> = std::fs::read_to_string("debug_data/le_skill_trees.json")
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok());
 
@@ -456,7 +460,7 @@ fn write_passives(file: &mut File, json: &Value, resolver: &Resolver) -> Result<
         .unwrap_or(255) as u8;
     
     // Load full passive tree graph
-    let char_trees_dump: Option<Value> = std::fs::read_to_string("le_char_trees.json")
+    let char_trees_dump: Option<Value> = std::fs::read_to_string("debug_data/le_char_trees.json")
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok());
 
