@@ -19,7 +19,7 @@ Extracts character stats, build, and equipment data from [Last Epoch Tools](http
    git clone https://github.com/JLC827/last-epoch-build-as-plaintext.git
    cd last-epoch-build-as-plaintext
    ```
-   *(Keep this command prompt open!)*
+   *(Keep this command prompt open)*
 3. **Run the Scraper**:
    In the same command prompt from earlier, run the following command (replace `<YOUR_BUILD_URL>` with your pasted link):
    ```powershell
