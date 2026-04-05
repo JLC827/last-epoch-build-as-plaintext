@@ -1,7 +1,5 @@
 # Last Epoch Build As Plaintext
 
-[![GitHub repo](https://img.shields.io/badge/GitHub-JLC827%2Flast--epoch--build--as--plaintext-blue?logo=github)](https://github.com/JLC827/last-epoch-build-as-plaintext)
-
 Extracts character stats, build, and equipment data from [Last Epoch Tools](https://www.lastepochtools.com/planner/) into plain text format. Useful for LLM build analysis.
 
 ## How to get your Build URL
@@ -25,8 +23,8 @@ Extracts character stats, build, and equipment data from [Last Epoch Tools](http
 3. **Run the Scraper**:
    In the same command prompt from earlier, run the following command (replace `<YOUR_BUILD_URL>` with your pasted link):
    ```powershell
-   cargo run -- "<YOUR_BUILD_URL>"
-   # Example: cargo run -- "https://www.lastepochtools.com/planner/o3ZbjxKn"
+   cargo run "<YOUR_BUILD_URL>"
+   # Example: cargo run "https://www.lastepochtools.com/planner/o3ZbjxKn"
    ```
 4. **Done!**
    - The plain text build summary is automatically copied to your clipboard.
@@ -46,6 +44,10 @@ The scraper uses the `headless_chrome` crate to automate a hidden browser instan
 3. Serializes and extracts internal JSON states (e.g., `window.buildInfo`, `window.itemDB`).
 4. Performs an authenticated in-page `fetch()` to retrieve translation databases.
 5. Saves raw diagnostic data to `debug_data/` and writes a human-readable text file to `builds/`.
+
+## Repository
+
+[![GitHub repo](https://img.shields.io/badge/GitHub-JLC827%2Flast--epoch--build--as--plaintext-blue?logo=github)](https://github.com/JLC827/last-epoch-build-as-plaintext)
 
 ## License
 This project is released into the public domain under **The Unlicense**. You are entirely free to copy, modify, distribute, or use this for any purpose without seeking permission.
