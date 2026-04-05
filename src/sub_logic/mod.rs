@@ -188,6 +188,19 @@ pub fn run() -> Result<()> {
 
     println!("Data saved to {}", output_file_path);
 
+    // Copy to clipboard
+    if let Ok(content) = std::fs::read_to_string(&output_file_path) {
+        if let Ok(mut clipboard) = arboard::Clipboard::new() {
+            if clipboard.set_text(content).is_ok() {
+                println!("Data copied to clipboard.");
+            } else {
+                eprintln!("Failed to copy data to clipboard.");
+            }
+        } else {
+            eprintln!("Failed to access clipboard.");
+        }
+    }
+
     Ok(())
 }
 
