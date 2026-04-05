@@ -1,6 +1,6 @@
 # Last Epoch Build As Plaintext
 
-Extracts character stats, build, and equipment data from [Last Epoch Tools](https://www.lastepochtools.com/planner/) into plain text format. Useful for LLM build analysis.
+Extracts character stats, build, and equipment data from [Last Epoch Tools](https://www.lastepochtools.com/planner/) into plain text format. Useful for sharing, searching, or for LLM build analysis.
 
 ## How to get your Build URL
 
