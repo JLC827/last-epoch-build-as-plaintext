@@ -3,6 +3,7 @@ name = "letools_scraper"
 default-run = "letools_scraper"
 version = "0.1.0"
 edition = "2021"
+license = "Unlicense"
 
 [dependencies]
 headless_chrome = "1.0"
