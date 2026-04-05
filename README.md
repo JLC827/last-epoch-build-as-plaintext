@@ -1,5 +1,7 @@
 # Last Epoch Build As Plaintext
 
+[![GitHub repo](https://img.shields.io/badge/GitHub-JLC827%2Flast--epoch--build--as--plaintext-blue?logo=github)](https://github.com/JLC827/last-epoch-build-as-plaintext)
+
 Extracts character stats, build, and equipment data from [Last Epoch Tools](https://www.lastepochtools.com/planner/) into plain text format. Useful for LLM build analysis.
 
 ## How to get your Build URL
@@ -16,7 +18,7 @@ Extracts character stats, build, and equipment data from [Last Epoch Tools](http
 1. **Install Prerequisites**: Download and install [Rust](https://rustup.rs/) and [Git](https://git-scm.com/).
 2. **Get the Code**: Open a command prompt, clone the repository, and navigate into it:
    ```powershell
-   git clone https://github.com/YOUR_USERNAME/last-epoch-build-as-plaintext.git
+   git clone https://github.com/JLC827/last-epoch-build-as-plaintext.git
    cd last-epoch-build-as-plaintext
    ```
    *(Keep this command prompt open!)*
