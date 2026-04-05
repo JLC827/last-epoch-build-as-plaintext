@@ -91,18 +91,19 @@ impl Resolver {
             base_type_name_map: HashMap::new(),
         };
 
-        resolver.load_translations("translations.json")?;
-        resolver.load_properties("core_db.json")?;
-        resolver.load_affixes("item_db.json")?;
-        resolver.load_items("item_db.json")?;
-        resolver.load_uniques("item_db.json")?;
-        resolver.load_abilities("le_abilities.json")?;
+        resolver.load_translations("debug_data/translations.json")?;
+        resolver.load_properties("debug_data/core_db.json")?;
+        resolver.load_affixes("debug_data/item_db.json")?;
+        resolver.load_items("debug_data/item_db.json")?;
+        resolver.load_uniques("debug_data/item_db.json")?;
+        resolver.load_abilities("debug_data/le_abilities.json")?;
 
         Ok(resolver)
     }
 
     fn load_properties(&mut self, path: &str) -> Result<()> {
-        if let Ok(file) = File::open(path) {
+        let file = File::open(path).map_err(|e| anyhow::anyhow!("Failed to open {}: {}", path, e))?;
+        if true {
             let reader = BufReader::new(file);
             let json: Value = serde_json::from_reader(reader)?;
             
@@ -265,7 +266,8 @@ impl Resolver {
     }
 
     fn load_translations(&mut self, path: &str) -> Result<()> {
-        if let Ok(file) = File::open(path) {
+        let file = File::open(path).map_err(|e| anyhow::anyhow!("Failed to open {}: {}", path, e))?;
+        if true {
             let reader = BufReader::new(file);
             let json: Value = serde_json::from_reader(reader)?;
             
@@ -288,7 +290,8 @@ impl Resolver {
     }
 
     fn load_items(&mut self, path: &str) -> Result<()> {
-        if let Ok(file) = File::open(path) {
+        let file = File::open(path).map_err(|e| anyhow::anyhow!("Failed to open {}: {}", path, e))?;
+        if true {
             let reader = BufReader::new(file);
             let json: Value = serde_json::from_reader(reader)?;
             
@@ -363,7 +366,8 @@ impl Resolver {
     }
 
     fn load_uniques(&mut self, path: &str) -> Result<()> {
-        if let Ok(file) = File::open(path) {
+        let file = File::open(path).map_err(|e| anyhow::anyhow!("Failed to open {}: {}", path, e))?;
+        if true {
             let reader = BufReader::new(file);
             let json: Value = serde_json::from_reader(reader)?;
             
@@ -423,7 +427,8 @@ impl Resolver {
     }
 
     fn load_affixes(&mut self, path: &str) -> Result<()> {
-        if let Ok(file) = File::open(path) {
+        let file = File::open(path).map_err(|e| anyhow::anyhow!("Failed to open {}: {}", path, e))?;
+        if true {
             let reader = BufReader::new(file);
             let json: Value = serde_json::from_reader(reader)?;
             
@@ -488,7 +493,8 @@ impl Resolver {
     }
 
     fn load_abilities(&mut self, path: &str) -> Result<()> {
-        if let Ok(file) = File::open(path) {
+        let file = File::open(path).map_err(|e| anyhow::anyhow!("Failed to open {}: {}", path, e))?;
+        if true {
             let reader = BufReader::new(file);
             let json: Value = serde_json::from_reader(reader)?;
             
