@@ -6,14 +6,20 @@ use std::io::Write;
 use std::time::Duration;
 use serde_json::Value;
 
-mod resolver;
+pub mod resolver;
+pub mod idols_scraper;
 use resolver::Resolver;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 pub struct Args {
     /// URL of the build planner to scrape
-    pub url: String,
+    #[arg(required_unless_present = "idols", conflicts_with = "idols")]
+    pub url: Option<String>,
+
+    /// Scrape idols instead of build
+    #[arg(long, conflicts_with = "url")]
+    pub idols: bool,
 
     /// Output file path
     #[arg(short, long)]
@@ -23,14 +29,19 @@ pub struct Args {
 pub fn run() -> Result<()> {
     let args = Args::parse();
 
+    if args.idols {
+        return idols_scraper::scrape_idols();
+    }
+
+    let url = args.url.clone().ok_or_else(|| anyhow::anyhow!("URL is required when not using --idols"))?;
+
     let output_file_path = args.output.unwrap_or_else(|| {
-        let parts = args.url.trim_end_matches('/').split('/');
+        let parts = url.trim_end_matches('/').split('/');
         let name = parts.last().unwrap_or("build_data");
         format!("builds/{}.txt", name)
     });
 
-    println!("Scraping URL: {}", args.url);
-    
+    println!("Scraping URL: {}", url);
     // Ensure output directories exist
     std::fs::create_dir_all("builds").ok();
     std::fs::create_dir_all("debug_data").ok();
@@ -50,7 +61,7 @@ pub fn run() -> Result<()> {
     let tab = browser.new_tab()?;
     
     // Navigate to the URL
-    tab.navigate_to(&args.url)?;
+    tab.navigate_to(&url)?;
     
     // Wait for the page to load
     println!("Waiting for page to load...");
@@ -169,7 +180,7 @@ pub fn run() -> Result<()> {
     let resolver = Resolver::new()?;
 
     let mut file = File::create(&output_file_path)?;
-    writeln!(file, "Build Data for {}\n", args.url)?;
+    writeln!(file, "Build Data for {}\n", url)?;
     writeln!(file, "Note: Last Epoch tools does not report forging potential. Any non-corrupted items may have forging potential left over (but may be limited by forging level limits), or are due for corrupting.\n")?;
     
     write_character_info(&mut file, &build_json)?;
