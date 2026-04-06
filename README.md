@@ -32,6 +32,13 @@ Extracts character stats, build, and equipment data from [Last Epoch Tools](http
 
 ---
 
+## Scraping All Idol Data
+You can also scrape the entire database of idols, including their prefixes, suffixes, and item details. This command does not require a build URL (the two are mutually exclusive).
+- **Execution**: `cargo run -- --idols`
+- **Output**: Generates a comprehensive plaintext file at `builds/idols.txt` aggregating all idol sizes, drop conditions, and affix data.
+
+---
+
 ## Features
 - **Character Stats Extraction**: Pulls level, class, attributes, resistances, defenses, and general stats.
 - **Skills and Passives Extraction**: Extracts active skills, nodes on the passive skill tree, and skill modifiers. Skill tree requirements and passive bonus breakpoints are also listed.
