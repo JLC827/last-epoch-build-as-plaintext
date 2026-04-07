@@ -726,12 +726,12 @@ fn write_blessings(file: &mut File, json: &Value, resolver: &Resolver) -> Result
         "The Stolen Lance",
         "The Black Sun",
         "Blood, Frost, and Death",
-        "Fall of the Empire",
         "Ending the Storm",
+        "Fall of the Empire",
         "Reign of Dragons",
-        "Spirits of Fire",
-        "Age of Winter",
         "The Last Ruin",
+        "Age of Winter",
+        "Spirits of Fire",
     ];
 
     if let Some(blessings) = json.get("data").and_then(|d| d.get("blessings").and_then(|b| b.as_object())) {

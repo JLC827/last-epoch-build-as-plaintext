@@ -34,6 +34,7 @@ struct UniqueMod {
     roll_id: usize,
     can_roll: bool,
     tags: u32,
+    special_tag: u32,
     hide_in_tooltip: bool,
 }
 
@@ -71,7 +72,10 @@ struct ItemData {
 
 #[derive(Debug, Clone)]
 struct ImplicitData {
-    property_id: u32,    tags: u32,    value: f32,
+    property_id: u32,
+    tags: u32,
+    special_tag: u32,
+    value: f32,
     max_value: f32,
 }
 
@@ -322,7 +326,8 @@ impl Resolver {
                                                 let val = imp.get("implicitValue").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
                                                 let max_val = imp.get("implicitMaxValue").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
                                                 let tag_val = imp.get("tags").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                                                implicits.push(ImplicitData { property_id: prop, tags: tag_val, value: val, max_value: max_val });
+                                                let special_tag = imp.get("specialTag").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                                                implicits.push(ImplicitData { property_id: prop, tags: tag_val, special_tag, value: val, max_value: max_val });
                                             }
                                         }
                                         let item_data = ItemData { implicits, base_type_id };
@@ -346,7 +351,8 @@ impl Resolver {
                                                 let val = imp.get("implicitValue").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
                                                 let max_val = imp.get("implicitMaxValue").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
                                                 let tag_val = imp.get("tags").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                                                implicits.push(ImplicitData { property_id: prop, tags: tag_val, value: val, max_value: max_val });
+                                                let special_tag = imp.get("specialTag").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                                                implicits.push(ImplicitData { property_id: prop, tags: tag_val, special_tag, value: val, max_value: max_val });
                                             }
                                         }
                                         let item_data = ItemData { implicits, base_type_id };
@@ -390,6 +396,7 @@ impl Resolver {
                                 let roll_id = m.get("rollId").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
                                 let can_roll = m.get("canRoll").and_then(|v| v.as_u64()).unwrap_or(0) == 1;
                                 let tags = m.get("tags").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                                let special_tag = m.get("specialTag").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                                 let hide_in_tooltip = m.get("hideInTooltip").and_then(|v| v.as_u64()).unwrap_or(0) > 0;
                                 
                                 mods.push(UniqueMod {
@@ -399,6 +406,7 @@ impl Resolver {
                                     roll_id,
                                     can_roll,
                                     tags,
+                                    special_tag,
                                     hide_in_tooltip,
                                 });
                             }
@@ -579,7 +587,7 @@ impl Resolver {
             // Base Implicits
             if let Some(base_data) = self.base_item_map.get(&(data.base_type_id, data.sub_type_id)) {
                 for (i, imp) in base_data.implicits.iter().enumerate() {
-                    let prop_name = self.get_property_name(imp.property_id, imp.tags);
+                    let prop_name = self.get_property_name(imp.property_id, imp.tags, imp.special_tag);
                     let RollData { min, max } = RollData { min: imp.value, max: imp.max_value };
                     
                     let roll_val = if i < ir.len() {
@@ -617,7 +625,7 @@ impl Resolver {
                 if m.hide_in_tooltip {
                     continue;
                 }
-                let prop_name = self.get_property_name(m.property_id, m.tags);
+                let prop_name = self.get_property_name(m.property_id, m.tags, m.special_tag);
                 
                 if !m.can_roll {
                     let val = m.value;
@@ -673,7 +681,7 @@ impl Resolver {
         if let Some(data) = self.item_data_map.get(id) {
             let mut parts = Vec::new();
             for (i, imp) in data.implicits.iter().enumerate() {
-                let prop_name = self.get_property_name(imp.property_id, imp.tags);
+                let prop_name = self.get_property_name(imp.property_id, imp.tags, imp.special_tag);
                 
                 let min = imp.value;
                 let max = imp.max_value;
@@ -753,7 +761,22 @@ impl Resolver {
         "".to_string()
     }
 
-    pub fn get_property_name(&self, property_id: u32, tags: u32) -> String {
+    pub fn get_property_name(&self, property_id: u32, tags: u32, special_tag: u32) -> String {
+        if property_id == 104 {
+            let base_prop = self.property_map.get(&property_id).map(|s| s.clone()).unwrap_or_else(|| "Unknown Property".to_string());
+            if special_tag == 3 {
+                return format!("Unique {}", base_prop);
+            } else if special_tag == 4 {
+                return format!("Class Specific Shard {}", base_prop);
+            } else if special_tag == 2 {
+                let subtype = self.get_base_type_name(tags).map(|s| s.clone()).unwrap_or_else(|| "Unknown".to_string());
+                return format!("{} Shard {}", subtype, base_prop);
+            } else if special_tag == 0 {
+                let subtype = self.get_base_type_name(tags).map(|s| s.clone()).unwrap_or_else(|| "Unknown".to_string());
+                return format!("{} {}", subtype, base_prop);
+            }
+        }
+        
         if property_id == 98 {
             self.player_property_map.get(&tags).map(|s| s.clone()).unwrap_or_else(|| "Unknown Player Property".to_string())
         } else if property_id == 130 {
