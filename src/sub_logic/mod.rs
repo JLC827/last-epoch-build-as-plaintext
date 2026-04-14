@@ -60,6 +60,36 @@ pub fn run() -> Result<()> {
 
     let tab = browser.new_tab()?;
     
+    // Inject hook to intercept the planner data API fetch
+    let inject_json_hook = r#"
+        window.__letools_fetches = window.__letools_fetches || [];
+        if (!window.__origFetch__installed) {
+            window.__origFetch__installed = true;
+            const originalFetch = window.fetch;
+            window.fetch = async function() {
+                let parsedArgs = Array.from(arguments);
+                let url = parsedArgs[0];
+                let res = await originalFetch.apply(this, arguments);
+                
+                if (typeof url === 'string' && url.includes('/api/internal/planner_data/')) {
+                    let clone = res.clone();
+                    try {
+                        let text = await clone.text();
+                        window.__letools_fetches.push({url: url, text: text});
+                    } catch(e) {}
+                }
+                return res;
+            };
+        }
+    "#;
+    
+    tab.call_method(headless_chrome::protocol::cdp::Page::AddScriptToEvaluateOnNewDocument {
+        source: inject_json_hook.into(),
+        world_name: None,
+        include_command_line_api: Some(false),
+        run_immediately: None,
+    })?;
+
     // Navigate to the URL
     tab.navigate_to(&url)?;
     
@@ -219,31 +249,53 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
-fn extract_build_info(tab: &headless_chrome::Tab) -> Result<String> {
+fn extract_build_info(tab: &headless_chrome::Tab) -> anyhow::Result<String> {
     let script = r#"
         (function() {
-            const buildInfo = window.buildInfo;
-            if (!buildInfo) return null;
+            let fetches = window.__letools_fetches;
+            if (!fetches || fetches.length === 0) return null;
             
-            // Parse precalc_data if it's a string
-            if (typeof buildInfo.precalc_data === 'string') {
-                try {
-                    buildInfo.precalc_data = JSON.parse(buildInfo.precalc_data);
-                } catch (e) {
-                    // ignore
+            // Grab the last matching fetch payload
+            let lastFetch = fetches[fetches.length - 1].text;
+            try {
+                let parsed = JSON.parse(lastFetch);
+                const buildInfo = parsed;
+                if (!buildInfo.data) return null;
+                
+                // Parse precalc_data if it's a string
+                if (typeof buildInfo.precalc_data === 'string') {
+                    try {
+                        buildInfo.precalc_data = JSON.parse(buildInfo.precalc_data);
+                    } catch (e) {
+                        // ignore
+                    }
                 }
+                
+                return JSON.stringify(buildInfo);
+            } catch(e) {
+                return null;
             }
-            
-            return JSON.stringify(buildInfo);
         })()
     "#;
     
-    let remote_object = tab.evaluate(script, false)?;
-    let value = remote_object.value.ok_or_else(|| anyhow::anyhow!("No value returned from script"))?;
+    // Poll for up to 30 seconds
+    let mut remote_object = tab.evaluate(script, false)?;
+    for _ in 0..15 {
+        if let Some(val) = &remote_object.value {
+            if !val.is_null() {
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_secs(2));
+        remote_object = tab.evaluate(script, false)?;
+    }
+
+    let value = remote_object.value.clone().ok_or_else(|| anyhow::anyhow!("No value returned from script: {:?}", remote_object))?;
     
     if value.is_null() {
-        return Err(anyhow::anyhow!("buildInfo not found on page"));
+        return Err(anyhow::anyhow!("fetch intercepted payload not found on page"));
     }
+
     
     if let Some(s) = value.as_str() {
         Ok(s.to_string())
