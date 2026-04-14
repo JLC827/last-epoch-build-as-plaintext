@@ -825,7 +825,7 @@ impl Resolver {
 
     pub fn get_passive_name(&self, class_id: u8, node_id: u8) -> String {
         let prefix = match class_id {
-            0 => "po",
+            0 => "pr",
             1 => "mg",
             2 => "kn",
             3 => "ac",
@@ -844,7 +844,7 @@ impl Resolver {
     #[allow(dead_code)]
     pub fn get_passive_description(&self, class_id: u8, node_id: u8) -> String {
         let prefix = match class_id {
-            0 => "po",
+            0 => "pr",
             1 => "mg",
             2 => "kn",
             3 => "ac",

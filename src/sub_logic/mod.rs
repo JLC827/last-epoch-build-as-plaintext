@@ -568,9 +568,10 @@ fn write_passives(file: &mut File, json: &Value, resolver: &Resolver) -> Result<
 
                         if let Ok(node_id) = node_id_str.parse::<u8>() {
                         let mut name = resolver.get_passive_name(class_id, node_id);
-                        if name.starts_with("Skills.") {
-                            if let Some(node_name_key) = node_data.get("nodeNameKey").and_then(|v| v.as_str()) {
-                                name = resolver.get_skill_name_bypassing(node_name_key); // I will create this resolver method
+                        if let Some(node_name_key) = node_data.get("nodeNameKey").and_then(|v| v.as_str()) {
+                            let bypass_name = resolver.get_skill_name_bypassing(node_name_key);
+                            if bypass_name != node_name_key {
+                                name = bypass_name;
                             }
                         }
 
@@ -592,9 +593,10 @@ fn write_passives(file: &mut File, json: &Value, resolver: &Resolver) -> Result<
                                     let mut r_name = format!("Node {}", r_id);
                                     if let Some(req_node_data) = nodes.get(&r_id.to_string()) {
                                         r_name = resolver.get_passive_name(class_id, r_id as u8);
-                                        if r_name.starts_with("Skills.") {
-                                            if let Some(node_name_key) = req_node_data.get("nodeNameKey").and_then(|v| v.as_str()) {
-                                                r_name = resolver.get_skill_name_bypassing(node_name_key);
+                                        if let Some(node_name_key) = req_node_data.get("nodeNameKey").and_then(|v| v.as_str()) {
+                                            let bypass_name = resolver.get_skill_name_bypassing(node_name_key);
+                                            if bypass_name != node_name_key {
+                                                r_name = bypass_name;
                                             }
                                         }
                                     }
