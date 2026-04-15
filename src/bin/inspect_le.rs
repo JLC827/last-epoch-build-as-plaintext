@@ -42,8 +42,8 @@ fn main() -> Result<()> {
     let full_tree = tab.evaluate("JSON.stringify(window.le_.skillTreeData || {})", false)?;
     if let Some(val) = full_tree.value {
         if let Some(s) = val.as_str() {
-            fs::write("le_skillTreeData.json", s)?;
-            println!("Saved le_skillTreeData.json");
+            fs::write("debug_data/le_skillTreeData.json", s)?;
+            println!("Saved debug_data/le_skillTreeData.json");
         }
     }
     
@@ -51,10 +51,11 @@ fn main() -> Result<()> {
     let class_tree = tab.evaluate("JSON.stringify(window.le_.classTreeData || {})", false)?;
     if let Some(val) = class_tree.value {
         if let Some(s) = val.as_str() {
-            fs::write("le_classTreeData.json", s)?;
-            println!("Saved le_classTreeData.json");
+            fs::write("debug_data/le_classTreeData.json", s)?;
+            println!("Saved debug_data/le_classTreeData.json");
         }
     }
+
     
     Ok(())
 }

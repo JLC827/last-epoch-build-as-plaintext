@@ -196,6 +196,54 @@ pub fn run() -> Result<()> {
         }
     }
 
+    // 5. Extract class skills mapping from planner JS
+    println!("Extracting class skills mapping...");
+    let class_script = r#"
+        (async () => {
+            try {
+                let scripts = Array.from(document.querySelectorAll('script')).filter(s => s.src && s.src.includes('planner/js'));
+                if (scripts.length === 0) return JSON.stringify({error: 'no planner script'});
+                let res = await fetch(scripts[0].src);
+                let text = await res.text();
+                
+                let classes = {};
+                let parts = text.split("characterClass:{classNameKey:");
+                for (let i = 1; i < parts.length; i++) {
+                    let p = parts[i].substring(0, 16000);
+                    let idMatch = p.match(/classID:(\d+)/);
+                    if (!idMatch) continue;
+                    let classId = parseInt(idMatch[1]);
+                    
+                    let unlStart = p.indexOf("unlockableAbilities:[");
+                    let mastStart = p.indexOf("masteries:[");
+                    if(unlStart === -1 || mastStart === -1) continue;
+                    
+                    let extract = p.substring(unlStart);
+                    let re = /ability:"([^"]+)"/g;
+                    let match;
+                    let abilities = [];
+                    while ((match = re.exec(extract)) !== null) {
+                        abilities.push(match[1]);
+                    }
+                    classes[classId] = abilities;
+                }
+                return JSON.stringify(classes);
+            } catch(e) {
+                return JSON.stringify({error: e.toString()});
+            }
+        })()
+    "#;
+    let mut class_skills_json = String::new();
+    let classes_res = tab.evaluate(class_script, true)?;
+    if let Some(val) = classes_res.value {
+        if let Some(s) = val.as_str() {
+            class_skills_json = s.to_string();
+            let mut file = File::create("debug_data/class_skills.json")?;
+            file.write_all(s.as_bytes())?;
+            println!("Saved class_skills.json");
+        }
+    }
+
     let build_info = extract_build_info(&tab)?;
     
     // Save build_info.json for debugging
@@ -220,6 +268,7 @@ pub fn run() -> Result<()> {
     
     writeln!(file, "\n--- Skills & Passives ---")?;
     write_skills(&mut file, &build_json, &resolver)?;
+    write_unconfigured_skills(&mut file, &build_json, &resolver, &class_skills_json)?;
     write_passives(&mut file, &build_json, &resolver)?;
     
     writeln!(file, "\n--- Equipment ---")?;
@@ -513,6 +562,97 @@ fn get_mastery_name(class_id: u8, mastery_id: u64) -> &'static str {
         (4, 3) => "Falconer",
         _ => "Unknown Category",
     }
+}
+
+fn write_unconfigured_skills(file: &mut File, json: &Value, resolver: &Resolver, class_skills_json: &str) -> Result<()> {
+    writeln!(file, "\n--- Unconfigured Skill Trees ---")?;
+
+    let skill_trees_dump: Option<Value> = std::fs::read_to_string("debug_data/le_skill_trees.json")
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok());
+
+    let char_class_id = json["character"]["classId"].as_u64().unwrap_or(0);
+    
+    // Parse the class skills JSON
+    let class_map: Value = serde_json::from_str(class_skills_json).unwrap_or(Value::Null);
+    
+    // Collect configured skill IDs
+    let mut configured_skills = std::collections::HashSet::new();
+    if let Some(skill_trees) = json["skillTrees"].as_array() {
+        for tree in skill_trees {
+            if let Some(skill_id) = tree["skillId"].as_str() {
+                configured_skills.insert(skill_id.to_string());
+            }
+        }
+    }
+
+    if let Some(skills) = class_map.get(&char_class_id.to_string()).and_then(|v| v.as_array()) {
+        let mut unconfigured = Vec::new();
+        for skill in skills {
+            if let Some(skill_id) = skill.as_str() {
+                if !configured_skills.contains(skill_id) {
+                    unconfigured.push(skill_id);
+                }
+            }
+        }
+        
+        if unconfigured.is_empty() {
+            writeln!(file, "None")?;
+        } else {
+            for skill_id in unconfigured {
+                let skill_name = resolver.get_skill_name(skill_id);
+                writeln!(file, "Skill: {}", skill_name)?;
+                
+                let nodes_obj = skill_trees_dump.as_ref().and_then(|d| d.get(skill_id)).and_then(|t| t.get("nodes")).and_then(|n| n.as_object());
+
+                if let Some(nodes) = nodes_obj {
+                    let mut sorted_keys: Vec<_> = nodes.keys().collect();
+                    // Sort so output is deterministic
+                    sorted_keys.sort_by_key(|k| k.parse::<u32>().unwrap_or(0));
+
+                    for node_id_str in sorted_keys {
+                        if let Some(node_data) = nodes.get(node_id_str) {
+                            let node_name = resolver.get_skill_node_name(skill_id, node_id_str);
+                            let max_pts = node_data.get("maxPoints").and_then(|v| v.as_u64()).unwrap_or(0);
+
+                            let mut reqs = Vec::new();
+                            if let Some(r_arr) = node_data.get("requirements").and_then(|v| v.as_array()) {
+                                for r in r_arr {
+                                    if let Some(r_id) = r.get("nodeId").and_then(|v| v.as_u64()) {
+                                        let req_pts = r.get("requirement").and_then(|v| v.as_u64()).unwrap_or(0);
+                                        let r_name = resolver.get_skill_node_name(skill_id, &r_id.to_string());
+                                        reqs.push(format!("Requires {} pts in {}", req_pts, r_name));
+                                    }
+                                }
+                            }
+
+                            writeln!(file, "  - Name: \"{}\"", node_name)?;
+                            writeln!(file, "    AllocatedPoints: 0")?;
+                            writeln!(file, "    MaxPoints: {}", max_pts)?;
+                            if !reqs.is_empty() {
+                                writeln!(file, "    Requirements: \"{}\"", reqs.join(", "))?;
+                            } else {
+                                writeln!(file, "    Requirements: None")?;
+                            }
+                            
+                            // Print description
+                            let node_desc = resolver.get_skill_node_description(skill_id, node_id_str);
+                            if !node_desc.is_empty() {
+                                // To keep YAML multiline, pad it
+                                let padded_desc = node_desc.replace('\n', "\n      ");
+                                writeln!(file, "    Effect: \"{}\"", padded_desc)?;
+                            }
+                            writeln!(file, "")?;
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        writeln!(file, "Failed to determine class skills mapping.")?;
+    }
+
+    Ok(())
 }
 
 fn write_passives(file: &mut File, json: &Value, resolver: &Resolver) -> Result<()> {
