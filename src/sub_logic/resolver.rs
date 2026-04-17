@@ -720,6 +720,12 @@ impl Resolver {
     }
 
     pub fn get_skill_name(&self, id: &str) -> String {
+        // --- PATCH FOR LE TOOLS BUG ---
+        if id == "frc87w" {
+            return "Frost Claw".to_string();
+        }
+        // ------------------------------
+
         let direct_key = format!("Skills.Skill_{}_0_Name", id);
         if let Some(trans) = self.translations.get(&direct_key) {
             return trans.clone();
@@ -891,4 +897,4 @@ impl Resolver {
     }
 }
 
-#[test] fn test_resolver() { let res = Resolver::new().unwrap(); println!("TR: {}", res.get_skill_name_bypassing("Skills.Skill_kn-1_10_0_Stat")); assert!(false); }
+// Removed faulty test
