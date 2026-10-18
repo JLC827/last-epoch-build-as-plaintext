@@ -35,6 +35,12 @@ pub fn run() -> Result<()> {
 
     let url = args.url.clone().ok_or_else(|| anyhow::anyhow!("URL is required when not using --idols"))?;
 
+    if url.to_ascii_lowercase().contains("/profile/") {
+        return Err(anyhow::anyhow!(
+            "This is a Last Epoch Tools profile page for the whole build. This scraper expects the build planner page instead, with a URL like https://www.lastepochtools.com/planner/<build-id>."
+        ));
+    }
+
     let output_file_path = args.output.unwrap_or_else(|| {
         let parts = url.trim_end_matches('/').split('/');
         let name = parts.last().unwrap_or("build_data");
