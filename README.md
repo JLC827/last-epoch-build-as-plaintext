@@ -26,7 +26,7 @@ Extracts character stats, build, and equipment data from [Last Epoch Tools](http
    cargo run "<YOUR_BUILD_URL>"
    # Example: cargo run "https://www.lastepochtools.com/planner/o3ZbjxKn"
    ```
-4. **Done!**
+4. **Done**
    - The plain text build summary is automatically copied to your clipboard.
    - A copy is saved to the `builds/` directory.
 
@@ -59,4 +59,4 @@ The scraper uses the `headless_chrome` crate to automate a hidden browser instan
 ## License
 This project is released into the public domain under **The Unlicense**. You are entirely free to copy, modify, distribute, or use this for any purpose without seeking permission.
 
-Credit back to the repository is highly appreciated, but never legally required!
+Credit back to the repository is highly appreciated, but never legally required.
