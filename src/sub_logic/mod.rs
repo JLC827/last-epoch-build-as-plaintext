@@ -104,7 +104,8 @@ pub fn run() -> Result<()> {
         run_immediately: None,
     })?;
 
-    // Resolve profile links through their "View in Build Planner" anchor.
+    // For profile URLs the character's build is available from the profile's
+    // own data fetch, so the planner link is only a fallback.
     let mut profile_fallback: Option<String> = None;
     let mut class_skills_json = String::new();
     let scrape_url = if is_profile_url {
@@ -112,49 +113,41 @@ pub fn run() -> Result<()> {
         tab.navigate_to(&input_url)?;
         tab.wait_for_element("body")?;
 
-        // The profile page fetches the character's build through
-        // /api/internal/profile_data/. Keep it as a fallback source in case the
-        // planner page itself does not yield data.
         profile_fallback = extract_profile_build_info(&tab);
         if profile_fallback.is_some() {
-            println!("Captured the profile's own build data.");
+            println!("Captured the profile's own build data; no planner navigation needed.");
+            if let Some(cs) = capture_reference_data(&tab)? {
+                class_skills_json = cs;
+            }
+            input_url.clone()
+        } else {
+            let planner_url = find_build_planner_url(&tab)?;
+            println!("Following View in Build Planner: {}", planner_url);
+            tab.navigate_to(&planner_url)?;
+            planner_url
         }
-
-        let planner_url = find_build_planner_url(&tab)?;
-        if let Some(cs) = capture_reference_data(&tab)? {
-            class_skills_json = cs;
-        }
-        println!("Following View in Build Planner: {}", planner_url);
-        tab.navigate_to(&planner_url)?;
-        planner_url
     } else {
         tab.navigate_to(&input_url)?;
         input_url.clone()
     };
 
-    // Wait for the planner page to load
-    println!("Waiting for page to load...");
-    tab.wait_for_element("body")?;
-    
-    // Give React some time to render the dynamic content
-    std::thread::sleep(Duration::from_secs(5));
-
-    println!("Page loaded. Starting extraction...");
-    if let Some(cs) = capture_reference_data(&tab)? {
-        class_skills_json = cs;
-    }
-
     let mut profile_fallback_used = false;
-    let build_info = match extract_build_info(&tab) {
-        Ok(s) => s,
-        Err(err) => match profile_fallback.take() {
-            Some(fallback) => {
-                println!("Planner page did not yield build data; exporting the profile's own build data instead.");
-                profile_fallback_used = true;
-                fallback
-            }
-            None => return Err(err),
-        },
+    let build_info = if let Some(fallback) = profile_fallback.take() {
+        profile_fallback_used = true;
+        fallback
+    } else {
+        // Wait for the planner page to load
+        println!("Waiting for page to load...");
+        tab.wait_for_element("body")?;
+        
+        // Give React some time to render the dynamic content
+        std::thread::sleep(Duration::from_secs(5));
+
+        println!("Page loaded. Starting extraction...");
+        if let Some(cs) = capture_reference_data(&tab)? {
+            class_skills_json = cs;
+        }
+        extract_build_info(&tab)?
     };
     
     // Save build_info.json for debugging
@@ -169,9 +162,10 @@ pub fn run() -> Result<()> {
     // matching the existing builds/<name>.txt convention.
     let output_file_path = args.output.unwrap_or_else(|| {
         if profile_fallback_used {
-            let name = build_json
-                .get("data").and_then(|d| d.get("bio")).and_then(|b| b.get("name"))
-                .and_then(|v| v.as_str())
+            let name = build_json.get("buildId").and_then(|v| v.as_str())
+                .or_else(|| build_json
+                    .get("data").and_then(|d| d.get("bio")).and_then(|b| b.get("name"))
+                    .and_then(|v| v.as_str()))
                 .map(|s| s.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect::<String>())
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| "build_data".to_string());
@@ -558,6 +552,7 @@ fn extract_profile_build_info(tab: &headless_chrome::Tab) -> Option<String> {
                     if (parsed && parsed.buildInfo && parsed.buildInfo.data) {
                         const name = parsed.charInfo && (parsed.charInfo.characterName || parsed.charInfo.name);
                         if (name && parsed.buildInfo.data.bio) parsed.buildInfo.data.bio.name = name;
+                        if (parsed.buildId) parsed.buildInfo.buildId = parsed.buildId;
                         return JSON.stringify(parsed.buildInfo);
                     }
                 } catch(e) {}
