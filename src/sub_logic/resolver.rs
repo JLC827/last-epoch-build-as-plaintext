@@ -16,6 +16,12 @@ pub struct Resolver {
     property_map: HashMap<u32, String>,
     player_property_map: HashMap<u32, String>,
     base_type_name_map: HashMap<u32, String>,
+    property_display_map: HashMap<u32, PropDisplay>,
+    player_property_display_map: Vec<PropDisplay>,
+    ability_property_display_map: HashMap<u32, Vec<PropDisplay>>,
+    idol_altar_display_map: Vec<PropDisplay>,
+    idol_altar_default_display: PropDisplay,
+    base_type_modifier_map: HashMap<u32, f32>,
 }
 
 #[derive(Debug)]
@@ -41,9 +47,25 @@ struct UniqueMod {
 #[derive(Debug)]
 struct AffixData {
     display_name_key: String,
-    properties: Vec<String>,
+    props: Vec<PropMod>,
     tiers: Vec<TierData>,
     fallback_name: Option<String>,
+    std_mod: f32,
+}
+
+#[derive(Debug, Clone)]
+struct PropMod {
+    name_key: String,
+    property: u32,
+    tags: u32,
+    special_tag: u32,
+    modifier_type: u32,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct PropDisplay {
+    added_as_percentage: bool,
+    as_percentage_of: bool,
 }
 
 #[derive(Debug)]
@@ -93,6 +115,12 @@ impl Resolver {
             property_map: Self::init_property_map(),
             player_property_map: HashMap::new(),
             base_type_name_map: HashMap::new(),
+            property_display_map: HashMap::new(),
+            player_property_display_map: Vec::new(),
+            ability_property_display_map: HashMap::new(),
+            idol_altar_display_map: Vec::new(),
+            idol_altar_default_display: PropDisplay::default(),
+            base_type_modifier_map: HashMap::new(),
         };
 
         resolver.load_translations("debug_data/translations.json")?;
@@ -121,6 +149,10 @@ impl Resolver {
                                 self.property_map.insert(id as u32, key.to_string());
                             }
                         }
+                        self.property_display_map.insert(id as u32, PropDisplay {
+                            added_as_percentage: item.get("displayAddedAsPercentage").and_then(|v| v.as_u64()).unwrap_or(0) > 0,
+                            as_percentage_of: item.get("displayAsPercentageOf").and_then(|v| v.as_u64()).unwrap_or(0) > 0,
+                        });
                     }
                 }
             }
@@ -135,6 +167,37 @@ impl Resolver {
                             self.player_property_map.insert(id, key.to_string());
                         }
                      }
+                    self.player_property_display_map.push(PropDisplay {
+                        added_as_percentage: item.get("displayAddedAsPercentage").and_then(|v| v.as_u64()).unwrap_or(0) > 0,
+                        as_percentage_of: item.get("displayAsPercentageOf").and_then(|v| v.as_u64()).unwrap_or(0) > 0,
+                    });
+                }
+            }
+
+            if let Some(list) = json.get("abilityPropertyList").and_then(|v| v.as_array()) {
+                for entry in list {
+                    let ability_id = entry.get("abilityID").and_then(|v| v.as_u64());
+                    let props = entry.get("properties").and_then(|v| v.as_array());
+                    if let (Some(ability_id), Some(props)) = (ability_id, props) {
+                        let displays = props.iter().map(|p| PropDisplay {
+                            added_as_percentage: p.get("displayAddedAsPercentage").and_then(|v| v.as_u64()).unwrap_or(0) > 0,
+                            as_percentage_of: p.get("displayAsPercentageOf").and_then(|v| v.as_u64()).unwrap_or(0) > 0,
+                        }).collect();
+                        self.ability_property_display_map.insert(ability_id as u32, displays);
+                    }
+                }
+            }
+
+            if let Some(obj) = json.get("idolAltarPropertyList").and_then(|v| v.as_object()) {
+                let parse_flags = |p: &Value| PropDisplay {
+                    added_as_percentage: p.get("displayAddedAsPercentage").and_then(|v| v.as_u64()).unwrap_or(0) > 0,
+                    as_percentage_of: p.get("displayAsPercentageOf").and_then(|v| v.as_u64()).unwrap_or(0) > 0,
+                };
+                if let Some(list) = obj.get("list").and_then(|v| v.as_array()) {
+                    self.idol_altar_display_map = list.iter().map(parse_flags).collect();
+                }
+                if let Some(default) = obj.get("defaultProperty") {
+                    self.idol_altar_default_display = parse_flags(default);
                 }
             }
         }
@@ -306,6 +369,10 @@ impl Resolver {
                         for (base_type_key, base_type_val) in cat_obj {
                             let base_type_id = base_type_key.parse::<u32>().unwrap_or(0);
                             
+                            if let Some(modifier) = base_type_val.get("affixEffectModifier").and_then(|v| v.as_f64()) {
+                                self.base_type_modifier_map.insert(base_type_id, modifier as f32);
+                            }
+                            
                             // Extract base type name map
                             if let Some(display_name_key) = base_type_val.get("displayNameKey").and_then(|v| v.as_str()) {
                                 if let Some(translated_name) = self.translations.get(display_name_key) {
@@ -450,14 +517,20 @@ impl Resolver {
                                     .unwrap_or("")
                                     .to_string();
                                 
-                                let mut properties = Vec::new();
-                                if let Some(props) = obj.get("affixProperties").and_then(|v| v.as_array()) {
-                                    for p in props {
+                                let mut props = Vec::new();
+                                if let Some(prop_arr) = obj.get("affixProperties").and_then(|v| v.as_array()) {
+                                    for p in prop_arr {
                                         let key = p.get("modDisplayNameKey")
                                             .and_then(|v| v.as_str())
                                             .unwrap_or("")
                                             .to_string();
-                                        properties.push(key);
+                                        props.push(PropMod {
+                                            name_key: key,
+                                            property: p.get("property").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+                                            tags: p.get("tags").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+                                            special_tag: p.get("specialTag").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+                                            modifier_type: p.get("modifierType").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+                                        });
                                     }
                                 }
 
@@ -477,12 +550,14 @@ impl Resolver {
                                 }
                                 
                                 let fallback = obj.get("Ce").and_then(|v| v.as_str()).map(|s| s.to_string());
+                                let std_mod = obj.get("standardAffixEffectModifier").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
                                 
                                 self.affix_map.insert(id.to_string(), AffixData {
                                     display_name_key,
-                                    properties,
+                                    props,
                                     tiers,
                                     fallback_name: fallback,
+                                    std_mod,
                                 });
                             }
                         }
@@ -535,16 +610,65 @@ impl Resolver {
         id.to_string()
     }
 
-    pub fn get_affix_detail(&self, id: &str, tier: usize, roll: f32) -> String {
+    pub fn get_item_type_modifier(&self, item_id: &str) -> f32 {
+        let base_type_id = self.item_data_map.get(item_id).map(|d| d.base_type_id)
+            .or_else(|| self.unique_data_map.get(item_id).map(|d| d.base_type_id));
+        base_type_id
+            .and_then(|bt| self.base_type_modifier_map.get(&bt))
+            .copied()
+            .unwrap_or(0.0)
+    }
+
+    fn is_percentage_mod(&self, prop_mod: &PropMod, raw_min: f32) -> bool {
+        let flags = match prop_mod.property {
+            // Player properties are indexed by tags.
+            98 => self.player_property_display_map.get(prop_mod.tags as usize).copied(),
+            // Ability properties: tags = abilityID, specialTag = property index.
+            58 => self.ability_property_display_map.get(&prop_mod.tags)
+                .and_then(|v| v.get(prop_mod.special_tag as usize))
+                .copied(),
+            // Idol altar properties are indexed by tags.
+            130 => self.idol_altar_display_map.get(prop_mod.tags as usize)
+                .or(Some(&self.idol_altar_default_display))
+                .copied(),
+            _ => self.property_display_map.get(&prop_mod.property).copied(),
+        };
+        // Fractional raw rolls (below 1) are percentage stats even when the
+        // display flags are silent (property tables store percentages as
+        // fractions); larger raw values are flat numbers.
+        let fractional = raw_min != 0.0 && raw_min.abs() < 1.0;
+        match flags {
+            Some(f) => f.added_as_percentage || f.as_percentage_of || prop_mod.modifier_type != 0 || fractional,
+            None => prop_mod.modifier_type != 0 || (raw_min != 0.0 && raw_min.abs() < 2.0),
+        }
+    }
+
+    pub fn get_affix_detail(&self, id: &str, tier: usize, roll: f32, type_modifier: f32) -> String {
         if let Some(data) = self.affix_map.get(id) {
             let tier_idx = if tier > 0 { tier - 1 } else { 0 };
             
             if let Some(tier_data) = data.tiers.get(tier_idx) {
+                // Affix tier rolls are stored for a "standard" item type
+                // (standardAffixEffectModifier). Re-scale to the actual item type:
+                // displayed = raw * (1 + item_type_modifier) / (1 + std_mod).
+                let denom = 1.0 + data.std_mod;
+                let scale = if denom.abs() < 1e-9 {
+                    1.0 + type_modifier
+                } else {
+                    (1.0 + type_modifier) / denom
+                };
+                
                 let mut parts = Vec::new();
                 for (i, roll_data) in tier_data.rolls.iter().enumerate() {
-                    let default_key = String::new();
-                    let prop_key = data.properties.get(i).unwrap_or(&default_key);
-                    let mut prop_name = self.translations.get(prop_key).map(|s| s.as_str()).unwrap_or("Unknown Property");
+                    let default_mod = PropMod {
+                        name_key: String::new(),
+                        property: 0,
+                        tags: 0,
+                        special_tag: 0,
+                        modifier_type: 0,
+                    };
+                    let prop_mod = data.props.get(i).unwrap_or(&default_mod);
+                    let mut prop_name = self.translations.get(&prop_mod.name_key).map(|s| s.as_str()).unwrap_or("Unknown Property");
                     
                     if prop_name == "Unknown Property" {
                         if let Some(ref fallback) = data.fallback_name {
@@ -552,25 +676,23 @@ impl Resolver {
                         }
                     }
                     
-                    let val = roll_data.min + (roll_data.max - roll_data.min) * (roll / 255.0);
-                    
-                    let (val_s, min_s, max_s) = if roll_data.min.abs() < 2.0 && roll_data.min != 0.0 {
-                        (
-                            format!("{:.0}%", val * 100.0),
-                            format!("{:.0}%", roll_data.min * 100.0),
-                            format!("{:.0}%", roll_data.max * 100.0)
-                        )
+                    let s_min = roll_data.min * scale;
+                    let s_max = roll_data.max * scale;
+                    let s_val = s_min + (s_max - s_min) * (roll / 255.0);
+                    let pct = self.is_percentage_mod(prop_mod, roll_data.min);
+                    let fmt_val = |v: f32| if pct {
+                        format!("{:.0}%", v * 100.0)
                     } else {
-                        (
-                            format!("{:.0}", val),
-                            format!("{:.0}", roll_data.min),
-                            format!("{:.0}", roll_data.max)
-                        )
+                        format!("{:.0}", v)
                     };
-
+                    
+                    let val_s = fmt_val(s_val);
+                    
                     if roll_data.min == roll_data.max {
                          parts.push(format!("[T{}] +{} {}", tier, val_s, prop_name));
                     } else {
+                         let min_s = fmt_val(s_min);
+                         let max_s = fmt_val(s_max);
                          parts.push(format!("[T{}] +{} ({}-{}) {}", tier, val_s, min_s, max_s, prop_name));
                     }
                 }

@@ -13,13 +13,17 @@ use resolver::Resolver;
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 pub struct Args {
-    /// URL of the build planner to scrape
-    #[arg(required_unless_present = "idols", conflicts_with = "idols")]
+    /// URL of a build planner or character profile to scrape
+    #[arg(required_unless_present_any = ["idols", "offline"], conflicts_with_all = ["idols", "offline"])]
     pub url: Option<String>,
 
     /// Scrape idols instead of build
     #[arg(long, conflicts_with = "url")]
     pub idols: bool,
+
+    /// Re-export from a previously captured build_info JSON instead of scraping
+    #[arg(long, value_name = "BUILD_INFO_JSON", num_args = 0..=1, default_missing_value = "debug_data/build_info.json")]
+    pub offline: Option<String>,
 
     /// Output file path
     #[arg(short, long)]
@@ -33,24 +37,28 @@ pub fn run() -> Result<()> {
         return idols_scraper::scrape_idols();
     }
 
-    let url = args.url.clone().ok_or_else(|| anyhow::anyhow!("URL is required when not using --idols"))?;
-
-    if url.to_ascii_lowercase().contains("/profile/") {
-        return Err(anyhow::anyhow!(
-            "This is a Last Epoch Tools profile page for the whole build. This scraper expects the build planner page instead, with a URL like https://www.lastepochtools.com/planner/<build-id>."
-        ));
-    }
-
-    let output_file_path = args.output.unwrap_or_else(|| {
-        let parts = url.trim_end_matches('/').split('/');
-        let name = parts.last().unwrap_or("build_data");
-        format!("builds/{}.txt", name)
-    });
-
-    println!("Scraping URL: {}", url);
     // Ensure output directories exist
     std::fs::create_dir_all("builds").ok();
     std::fs::create_dir_all("debug_data").ok();
+
+    if let Some(offline_path) = &args.offline {
+        println!("Re-exporting from {}", offline_path);
+        let build_info = std::fs::read_to_string(offline_path)
+            .map_err(|e| anyhow::anyhow!("Failed to read {}: {}", offline_path, e))?;
+        let build_json: Value = serde_json::from_str(&build_info)?;
+        let class_skills_json = std::fs::read_to_string("debug_data/class_skills.json").unwrap_or_default();
+        println!("Initializing data resolver...");
+        let resolver = Resolver::new()?;
+        let output_file_path = args.output.unwrap_or_else(|| "builds/offline_export.txt".to_string());
+        export_build(&build_json, &class_skills_json, &resolver, &output_file_path, offline_path)?;
+        println!("Data saved to {}", output_file_path);
+        return Ok(());
+    }
+
+    let input_url = args.url.clone().ok_or_else(|| anyhow::anyhow!("URL is required when not using --idols"))?;
+    let is_profile_url = input_url.to_ascii_lowercase().contains("/profile/");
+
+    println!("Scraping URL: {}", input_url);
 
     let browser = Browser::new(LaunchOptions {
         headless: true,
@@ -77,7 +85,7 @@ pub fn run() -> Result<()> {
                 let url = parsedArgs[0];
                 let res = await originalFetch.apply(this, arguments);
                 
-                if (typeof url === 'string' && url.includes('/api/internal/planner_data/')) {
+                if (typeof url === 'string' && url.includes('/api/')) {
                     let clone = res.clone();
                     try {
                         let text = await clone.text();
@@ -96,10 +104,35 @@ pub fn run() -> Result<()> {
         run_immediately: None,
     })?;
 
-    // Navigate to the URL
-    tab.navigate_to(&url)?;
-    
-    // Wait for the page to load
+    // Resolve profile links through their "View in Build Planner" anchor.
+    let mut profile_fallback: Option<String> = None;
+    let mut class_skills_json = String::new();
+    let scrape_url = if is_profile_url {
+        println!("Opening character profile...");
+        tab.navigate_to(&input_url)?;
+        tab.wait_for_element("body")?;
+
+        // The profile page fetches the character's build through
+        // /api/internal/profile_data/. Keep it as a fallback source in case the
+        // planner page itself does not yield data.
+        profile_fallback = extract_profile_build_info(&tab);
+        if profile_fallback.is_some() {
+            println!("Captured the profile's own build data.");
+        }
+
+        let planner_url = find_build_planner_url(&tab)?;
+        if let Some(cs) = capture_reference_data(&tab)? {
+            class_skills_json = cs;
+        }
+        println!("Following View in Build Planner: {}", planner_url);
+        tab.navigate_to(&planner_url)?;
+        planner_url
+    } else {
+        tab.navigate_to(&input_url)?;
+        input_url.clone()
+    };
+
+    // Wait for the planner page to load
     println!("Waiting for page to load...");
     tab.wait_for_element("body")?;
     
@@ -107,23 +140,291 @@ pub fn run() -> Result<()> {
     std::thread::sleep(Duration::from_secs(5));
 
     println!("Page loaded. Starting extraction...");
+    if let Some(cs) = capture_reference_data(&tab)? {
+        class_skills_json = cs;
+    }
+
+    let mut profile_fallback_used = false;
+    let build_info = match extract_build_info(&tab) {
+        Ok(s) => s,
+        Err(err) => match profile_fallback.take() {
+            Some(fallback) => {
+                println!("Planner page did not yield build data; exporting the profile's own build data instead.");
+                profile_fallback_used = true;
+                fallback
+            }
+            None => return Err(err),
+        },
+    };
+    
+    // Save build_info.json for debugging
+    let mut file = File::create("debug_data/build_info.json")?;
+    file.write_all(build_info.as_bytes())?;
+    println!("Saved build_info.json");
+
+    let build_json: Value = serde_json::from_str(&build_info)?;
+
+    // Name the output after the resolved build code (planner code or char_build
+    // id), or the character name when exporting the profile's own build data,
+    // matching the existing builds/<name>.txt convention.
+    let output_file_path = args.output.unwrap_or_else(|| {
+        if profile_fallback_used {
+            let name = build_json
+                .get("data").and_then(|d| d.get("bio")).and_then(|b| b.get("name"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect::<String>())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "build_data".to_string());
+            format!("builds/{}.txt", name)
+        } else {
+            format!("builds/{}.txt", build_output_name(&scrape_url))
+        }
+    });
+
+    // Initialize Resolver
+    println!("Initializing data resolver...");
+    let resolver = Resolver::new()?;
+
+    export_build(&build_json, &class_skills_json, &resolver, &output_file_path, &scrape_url)?;
+    println!("Data saved to {}", output_file_path);
+
+    // Copy to clipboard
+    if let Ok(content) = std::fs::read_to_string(&output_file_path) {
+        if let Ok(mut clipboard) = arboard::Clipboard::new() {
+            if clipboard.set_text(content).is_ok() {
+                println!("Data copied to clipboard.");
+            } else {
+                eprintln!("Failed to copy data to clipboard.");
+            }
+        } else {
+            eprintln!("Failed to access clipboard.");
+        }
+    }
+
+    Ok(())
+}
+
+fn find_build_planner_url(tab: &headless_chrome::Tab) -> anyhow::Result<String> {
+    // 1) Resolve the character's build planner URL without needing the link's
+    // target: the profile page's "View in Build Planner" button carries the
+    // build id as an attribute and navigates to /planner/?char_build=<id>.
+    // Anchors with a planner build code are checked as well (covers icon-only
+    // or localized labels), excluding the site-wide /planner/ nav link.
+    let href_script = r#"
+        (() => {
+            const btn = document.querySelector('.profile-planner-link [buildid]') || document.querySelector('[buildid]');
+            const buildId = btn && (btn.getAttribute('buildid') || btn.getAttribute('buildId'));
+            if (buildId && buildId !== 'undefined') {
+                return location.origin + '/planner/?char_build=' + encodeURIComponent(buildId);
+            }
+            const codeRe = /\/planner\/[^/?#\s"']+/;
+            const anchors = Array.from(document.querySelectorAll('a[href*="/planner/"]'));
+            const candidates = [];
+            for (const a of anchors) {
+                const raw = a.getAttribute('href') || '';
+                if (!raw.match(codeRe)) continue;
+                const text = ((a.textContent || '') + ' ' + (a.getAttribute('aria-label') || '') + ' ' + (a.getAttribute('title') || '')).trim().toLowerCase();
+                candidates.push({
+                    href: a.href,
+                    mentionsPlanner: text.includes('planner'),
+                    inChrome: a.closest('nav, header, footer') !== null,
+                });
+            }
+            let best = candidates.find(c => c.mentionsPlanner && !c.inChrome)
+                || candidates.find(c => c.mentionsPlanner)
+                || candidates.find(c => !c.inChrome);
+            return best ? best.href : '';
+        })()
+    "#;
+
+    // 2) The profile page renders "View in Build Planner" as a framework button
+    // without any href. Mark the deepest element carrying that label, bring it
+    // into view, and capture window.open in case the click opens a new tab.
+    let mark_script = r#"
+        (() => {
+            const leaves = Array.from(document.querySelectorAll('div, button, a, span')).filter(el => {
+                const t = (el.textContent || '').trim().toLowerCase();
+                if (!t || t.length > 60 || !t.includes('planner')) return false;
+                if (el.closest('nav, header, footer')) return false;
+                return !Array.from(el.children).some(c => (c.textContent || '').toLowerCase().includes('planner'));
+            });
+            const target = leaves.find(el => (el.textContent || '').trim().toLowerCase().includes('view in build planner'))
+                || leaves.find(el => (el.textContent || '').trim().toLowerCase().includes('build planner'));
+            if (!target) return false;
+            target.setAttribute('data-letools-planner-target', '1');
+            try { target.scrollIntoView({block: 'center'}); } catch (e) {}
+            if (!window.__letoolsOpenWrapped) {
+                window.__letoolsOpenWrapped = true;
+                const origOpen = window.open;
+                window.__letoolsOpenedUrl = '';
+                window.open = function(url, ...rest) {
+                    if (typeof url === 'string') window.__letoolsOpenedUrl = url;
+                    return origOpen ? origOpen.call(window, url, ...rest) : null;
+                };
+            }
+            return true;
+        })()
+    "#;
+
+    // 3) After the click the SPA navigates this tab (window.location) or hands
+    // the URL to window.open; collect whichever planner URL appears. The
+    // planner page rewrites its history to /planner/ after loading, so prefer
+    // the navigation entry, which keeps the originally requested URL.
+    let nav_script = r#"
+        (() => {
+            const classify = raw => {
+                if (!raw) return '';
+                try {
+                    const u = new URL(raw, location.origin);
+                    if (!u.pathname.includes('/planner')) return '';
+                    const seg = u.pathname.replace(/\/+$/, '').split('/').pop();
+                    const hasCode = seg && seg !== 'planner';
+                    const hasQueryBuild = ['char_build', 'char_snapshot', 'ladder_build'].some(k => u.searchParams.get(k));
+                    return (hasCode || hasQueryBuild) ? u.href : '';
+                } catch (e) { return ''; }
+            };
+            const navs = performance.getEntriesByType('navigation');
+            const lastNav = navs.length ? navs[navs.length - 1].name : '';
+            return classify(window.__letoolsOpenedUrl) || classify(lastNav) || classify(location.href);
+        })()
+    "#;
+
+    let mut last_probe = String::new();
+    let mut clicked = false;
+    for attempt in 0..20 {
+        let remote_object = tab.evaluate(if clicked { nav_script } else { href_script }, false)?;
+        if let Some(href) = remote_object.value.as_ref().and_then(Value::as_str) {
+            let href = href.trim();
+            if !href.is_empty() {
+                if !href.contains("/planner/") {
+                    return Err(anyhow::anyhow!(
+                        "The build planner link did not point to a planner URL: {}",
+                        href
+                    ));
+                }
+                return Ok(href.to_string());
+            }
+        }
+        if !clicked && attempt >= 2 {
+            // No anchor after a few seconds: click the framework button once.
+            if let Ok(remote_object) = tab.evaluate(mark_script, false) {
+                if remote_object.value.as_ref().and_then(Value::as_bool) == Some(true) {
+                    let clicked_ok = tab.find_elements("[data-letools-planner-target]")
+                        .ok()
+                        .and_then(|mut els| els.pop())
+                        .map(|el| el.click().is_ok())
+                        .unwrap_or(false);
+                    if !clicked_ok {
+                        let _ = tab.evaluate("document.querySelector('[data-letools-planner-target]').click()", false);
+                    }
+                    clicked = true;
+                }
+            }
+        }
+        if attempt == 19 {
+            // Capture page state to make failures diagnosable.
+            let probe_js = r#"JSON.stringify({
+                title: document.title,
+                plannerAnchors: Array.from(document.querySelectorAll('a[href*="/planner/"]')).slice(0, 10).map(a => ({text: (a.textContent || '').trim().slice(0, 60), href: a.getAttribute('href')})),
+                plannerEls: Array.from(document.querySelectorAll('*')).filter(el => {
+                    const t = (el.textContent || '').trim().toLowerCase();
+                    return t.includes('planner') && !Array.from(el.children).some(c => (c.textContent || '').toLowerCase().includes('planner'));
+                }).slice(0, 10).map(el => ({tag: el.tagName, cls: (el.className || '').toString().slice(0, 60), text: (el.textContent || '').trim().slice(0, 80), onclick: (el.getAttribute('onclick') || '').slice(0, 120), href: el.getAttribute('href'), data: JSON.stringify(el.dataset).slice(0, 200)})),
+                bodyPreview: document.body ? document.body.innerText.slice(0, 200) : ''
+            })"#;
+            if let Ok(probe) = tab.evaluate(probe_js, false) {
+                if let Some(s) = probe.value.as_ref().and_then(Value::as_str) {
+                    last_probe = s.to_string();
+                }
+            }
+        }
+        if attempt < 19 {
+            std::thread::sleep(Duration::from_secs(2));
+        }
+    }
+
+    Err(anyhow::anyhow!(
+        "Could not find a build planner link on the character profile. \
+         The page may still have been loading or the link markup changed. \
+         Page state: {}",
+        last_probe
+    ))
+}
+
+fn build_output_name(scrape_url: &str) -> String {
+    let (path_part, query_part) = match scrape_url.split_once('?') {
+        Some((path, query)) => (path, Some(query)),
+        None => (scrape_url, None),
+    };
+    if let Some(query) = query_part {
+        for pair in query.split('&') {
+            if let Some((key, value)) = pair.split_once('=') {
+                if matches!(key, "char_build" | "char_snapshot" | "ladder_build") {
+                    let name: String = value.chars()
+                        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+                        .collect();
+                    if !name.is_empty() {
+                        return name;
+                    }
+                }
+            }
+        }
+    }
+    let last = path_part.trim_end_matches('/').split('/').last().unwrap_or("build_data");
+    last.chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .collect()
+}
+
+pub fn export_build(build_json: &Value, class_skills_json: &str, resolver: &Resolver, output_file_path: &str, source: &str) -> Result<()> {
+    let mut file = File::create(output_file_path)?;
+    writeln!(file, "Build Data for {}\n", source)?;
+    writeln!(file, "Note: Last Epoch tools does not report forging potential. Any non-corrupted items may have forging potential left over (but may be limited by forging level limits), or are due for corrupting.\n")?;
+    
+    write_character_info(&mut file, build_json)?;
+
+    writeln!(file, "--- Character Stats ---")?;
+    write_stats(&mut file, build_json)?;
+    
+    writeln!(file, "\n--- Skills & Passives ---")?;
+    write_skills(&mut file, build_json, resolver)?;
+    write_unconfigured_skills(&mut file, build_json, resolver, class_skills_json)?;
+    write_passives(&mut file, build_json, resolver)?;
+    
+    writeln!(file, "\n--- Equipment ---")?;
+    write_equipment(&mut file, build_json, resolver)?;
+    
+    writeln!(file, "\n--- Idols ---")?;
+    write_idols(&mut file, build_json, resolver)?;
+    
+    writeln!(file, "\n--- Blessings ---")?;
+    write_blessings(&mut file, build_json, resolver)?;
+    Ok(())
+}
+
+fn capture_reference_data(tab: &headless_chrome::Tab) -> Result<Option<String>> {
+    // Save the data tables the resolver needs. Empty results are skipped so a
+    // blocked or partially loaded page never clobbers previously captured data.
+    fn write_dump(path: &str, s: &str) -> Result<()> {
+        if s.is_empty() || s == "{}" {
+            println!("Skipped {} (page had no data)", path);
+            return Ok(());
+        }
+        std::fs::write(path, s)?;
+        println!("Saved {}", path);
+        Ok(())
+    }
 
     // Dump LESkillTrees
     let skill_trees_res = tab.evaluate("JSON.stringify(window.LESkillTrees || {})", false)?;
-    if let Some(val) = skill_trees_res.value {
-        if let Some(s) = val.as_str() {
-            std::fs::write("debug_data/le_skill_trees.json", s)?;
-            println!("Saved le_skill_trees.json");
-        }
+    if let Some(val) = skill_trees_res.value.as_ref().and_then(Value::as_str) {
+        write_dump("debug_data/le_skill_trees.json", val)?;
     }
 
     // Dump LECharTrees
     let char_trees_res = tab.evaluate("JSON.stringify(window.LECharTrees || {})", false)?;
-    if let Some(val) = char_trees_res.value {
-        if let Some(s) = val.as_str() {
-            std::fs::write("debug_data/le_char_trees.json", s)?;
-            println!("Saved le_char_trees.json");
-        }
+    if let Some(val) = char_trees_res.value.as_ref().and_then(Value::as_str) {
+        write_dump("debug_data/le_char_trees.json", val)?;
     }
 
     // 1. Extract Translations
@@ -161,45 +462,39 @@ pub fn run() -> Result<()> {
     "#;
     
     let trans_res = tab.evaluate(translation_script, true)?;
-    if let Some(val) = trans_res.value {
-        if let Some(s) = val.as_str() {
-            let mut file = File::create("debug_data/translations.json")?;
-            file.write_all(s.as_bytes())?;
-            println!("Saved translations.json");
+    if let Some(val) = trans_res.value.as_ref().and_then(Value::as_str) {
+        // A blocked page makes the fetch fail, yielding {"full":{"error":...}};
+        // never let that clobber previously captured translations.
+        let valid = serde_json::from_str::<Value>(val)
+            .ok()
+            .and_then(|v| v.get("full").and_then(|f| f.as_object()).map(|f| f.len() > 100))
+            .unwrap_or(false);
+        if valid {
+            write_dump("debug_data/translations.json", val)?;
+        } else {
+            println!("Skipped debug_data/translations.json (fetch failed)");
         }
     }
 
     // 2. Extract LEAbilities
     println!("Extracting LEAbilities...");
     let abilities_res = tab.evaluate("JSON.stringify(window.LEAbilities || {})", false)?;
-    if let Some(val) = abilities_res.value {
-        if let Some(s) = val.as_str() {
-            let mut file = File::create("debug_data/le_abilities.json")?;
-            file.write_all(s.as_bytes())?;
-            println!("Saved le_abilities.json");
-        }
+    if let Some(val) = abilities_res.value.as_ref().and_then(Value::as_str) {
+        write_dump("debug_data/le_abilities.json", val)?;
     }
 
     // 3. Extract coreDB
     println!("Extracting coreDB...");
     let coredb_res = tab.evaluate("JSON.stringify(window.coreDB || {})", false)?;
-    if let Some(val) = coredb_res.value {
-        if let Some(s) = val.as_str() {
-            let mut file = File::create("debug_data/core_db.json")?;
-            file.write_all(s.as_bytes())?;
-            println!("Saved core_db.json");
-        }
+    if let Some(val) = coredb_res.value.as_ref().and_then(Value::as_str) {
+        write_dump("debug_data/core_db.json", val)?;
     }
 
     // 4. Extract itemDB
     println!("Extracting itemDB...");
     let itemdb_res = tab.evaluate("JSON.stringify(window.itemDB || {})", false)?;
-    if let Some(val) = itemdb_res.value {
-        if let Some(s) = val.as_str() {
-            let mut file = File::create("debug_data/item_db.json")?;
-            file.write_all(s.as_bytes())?;
-            println!("Saved item_db.json");
-        }
+    if let Some(val) = itemdb_res.value.as_ref().and_then(Value::as_str) {
+        write_dump("debug_data/item_db.json", val)?;
     }
 
     // 5. Extract class skills mapping from planner JS
@@ -239,69 +534,50 @@ pub fn run() -> Result<()> {
             }
         })()
     "#;
-    let mut class_skills_json = String::new();
     let classes_res = tab.evaluate(class_script, true)?;
-    if let Some(val) = classes_res.value {
-        if let Some(s) = val.as_str() {
-            class_skills_json = s.to_string();
-            let mut file = File::create("debug_data/class_skills.json")?;
-            file.write_all(s.as_bytes())?;
-            println!("Saved class_skills.json");
+    if let Some(val) = classes_res.value.as_ref().and_then(Value::as_str) {
+        if !val.is_empty() && !val.contains("\"error\"") {
+            write_dump("debug_data/class_skills.json", val)?;
+            return Ok(Some(val.to_string()));
         }
     }
+    Ok(None)
+}
 
-    let build_info = extract_build_info(&tab)?;
-    
-    // Save build_info.json for debugging
-    let mut file = File::create("debug_data/build_info.json")?;
-    file.write_all(build_info.as_bytes())?;
-    println!("Saved build_info.json");
-
-    let build_json: Value = serde_json::from_str(&build_info)?;
-
-    // Initialize Resolver
-    println!("Initializing data resolver...");
-    let resolver = Resolver::new()?;
-
-    let mut file = File::create(&output_file_path)?;
-    writeln!(file, "Build Data for {}\n", url)?;
-    writeln!(file, "Note: Last Epoch tools does not report forging potential. Any non-corrupted items may have forging potential left over (but may be limited by forging level limits), or are due for corrupting.\n")?;
-    
-    write_character_info(&mut file, &build_json)?;
-
-    writeln!(file, "--- Character Stats ---")?;
-    write_stats(&mut file, &build_json)?;
-    
-    writeln!(file, "\n--- Skills & Passives ---")?;
-    write_skills(&mut file, &build_json, &resolver)?;
-    write_unconfigured_skills(&mut file, &build_json, &resolver, &class_skills_json)?;
-    write_passives(&mut file, &build_json, &resolver)?;
-    
-    writeln!(file, "\n--- Equipment ---")?;
-    write_equipment(&mut file, &build_json, &resolver)?;
-
-    writeln!(file, "\n--- Idols ---")?;
-    write_idols(&mut file, &build_json, &resolver)?;
-    
-    writeln!(file, "\n--- Blessings ---")?;
-    write_blessings(&mut file, &build_json, &resolver)?;
-
-    println!("Data saved to {}", output_file_path);
-
-    // Copy to clipboard
-    if let Ok(content) = std::fs::read_to_string(&output_file_path) {
-        if let Ok(mut clipboard) = arboard::Clipboard::new() {
-            if clipboard.set_text(content).is_ok() {
-                println!("Data copied to clipboard.");
-            } else {
-                eprintln!("Failed to copy data to clipboard.");
+fn extract_profile_build_info(tab: &headless_chrome::Tab) -> Option<String> {
+    // The profile page fetches /api/internal/profile_data/<hash>, whose response
+    // carries the character's build under `buildInfo` (same shape as the
+    // planner's build payload).
+    let script = r#"
+        (function() {
+            let fetches = window.__letools_fetches || [];
+            for (let i = fetches.length - 1; i >= 0; i--) {
+                if (!fetches[i].url.includes('profile_data')) continue;
+                try {
+                    const parsed = JSON.parse(fetches[i].text);
+                    if (parsed && parsed.buildInfo && parsed.buildInfo.data) {
+                        const name = parsed.charInfo && (parsed.charInfo.characterName || parsed.charInfo.name);
+                        if (name && parsed.buildInfo.data.bio) parsed.buildInfo.data.bio.name = name;
+                        return JSON.stringify(parsed.buildInfo);
+                    }
+                } catch(e) {}
             }
-        } else {
-            eprintln!("Failed to access clipboard.");
+            return null;
+        })()
+    "#;
+    for attempt in 0..10 {
+        if let Ok(remote_object) = tab.evaluate(script, false) {
+            if let Some(s) = remote_object.value.as_ref().and_then(Value::as_str) {
+                if !s.is_empty() {
+                    return Some(s.to_string());
+                }
+            }
+        }
+        if attempt < 9 {
+            std::thread::sleep(Duration::from_secs(1));
         }
     }
-
-    Ok(())
+    None
 }
 
 fn extract_build_info(tab: &headless_chrome::Tab) -> anyhow::Result<String> {
@@ -310,26 +586,27 @@ fn extract_build_info(tab: &headless_chrome::Tab) -> anyhow::Result<String> {
             let fetches = window.__letools_fetches;
             if (!fetches || fetches.length === 0) return null;
             
-            // Grab the last matching fetch payload
-            let lastFetch = fetches[fetches.length - 1].text;
-            try {
-                let parsed = JSON.parse(lastFetch);
-                const buildInfo = parsed;
-                if (!buildInfo.data) return null;
-                
-                // Parse precalc_data if it's a string
-                if (typeof buildInfo.precalc_data === 'string') {
-                    try {
-                        buildInfo.precalc_data = JSON.parse(buildInfo.precalc_data);
-                    } catch (e) {
-                        // ignore
+            // Pick the most recent captured payload that carries build data.
+            for (let i = fetches.length - 1; i >= 0; i--) {
+                try {
+                    const buildInfo = JSON.parse(fetches[i].text);
+                    if (!buildInfo || !buildInfo.data) continue;
+                    
+                    // Parse precalc_data if it's a string
+                    if (typeof buildInfo.precalc_data === 'string') {
+                        try {
+                            buildInfo.precalc_data = JSON.parse(buildInfo.precalc_data);
+                        } catch (e) {
+                            // ignore
+                        }
                     }
+                    
+                    return JSON.stringify(buildInfo);
+                } catch(e) {
+                    // try earlier captures
                 }
-                
-                return JSON.stringify(buildInfo);
-            } catch(e) {
-                return null;
             }
+            return null;
         })()
     "#;
     
@@ -345,10 +622,17 @@ fn extract_build_info(tab: &headless_chrome::Tab) -> anyhow::Result<String> {
         remote_object = tab.evaluate(script, false)?;
     }
 
-    let value = remote_object.value.clone().ok_or_else(|| anyhow::anyhow!("No value returned from script: {:?}", remote_object))?;
+    let value = remote_object.value.clone().unwrap_or(Value::Null);
     
     if value.is_null() {
-        return Err(anyhow::anyhow!("fetch intercepted payload not found on page"));
+        let captured = tab.evaluate(
+            "JSON.stringify({fetches: (window.__letools_fetches || []).map(f => f.url), resources: performance.getEntriesByType('resource').map(r => r.name).filter(u => u.includes('/api/') || u.includes('.php')), o0w25ox: (typeof o0w25ox_ !== 'undefined') ? o0w25ox_ : null, charBuildQuery: window.charBuildQuery || null, href: location.href})",
+            false,
+        )?;
+        return Err(anyhow::anyhow!(
+            "Build data payload not found among intercepted API fetches. Page state: {:?}",
+            captured.value
+        ));
     }
 
     
@@ -577,16 +861,20 @@ fn write_unconfigured_skills(file: &mut File, json: &Value, resolver: &Resolver,
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok());
 
-    let char_class_id = json["character"]["classId"].as_u64().unwrap_or(0);
+    let char_class_id = json.get("data")
+        .and_then(|d| d.get("bio"))
+        .and_then(|b| b.get("characterClass"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
     
     // Parse the class skills JSON
     let class_map: Value = serde_json::from_str(class_skills_json).unwrap_or(Value::Null);
     
     // Collect configured skill IDs
     let mut configured_skills = std::collections::HashSet::new();
-    if let Some(skill_trees) = json["skillTrees"].as_array() {
+    if let Some(skill_trees) = json.get("data").and_then(|d| d.get("skillTrees")).and_then(|v| v.as_array()) {
         for tree in skill_trees {
-            if let Some(skill_id) = tree["skillId"].as_str() {
+            if let Some(skill_id) = tree.get("treeID").and_then(|v| v.as_str()) {
                 configured_skills.insert(skill_id.to_string());
             }
         }
@@ -812,12 +1100,16 @@ fn write_equipment(file: &mut File, json: &Value, resolver: &Resolver) -> Result
     if let Some(equipment) = json.get("data").and_then(|d| d.get("equipment").and_then(|e| e.as_object())) {
         for (slot, item) in equipment {
             writeln!(file, "Slot: {}", slot)?;
+            let type_modifier = item.get("id").and_then(|v| v.as_str())
+                .map(|id| resolver.get_item_type_modifier(id))
+                .unwrap_or(0.0);
+            let corrupted_marker = if item.get("corruptedAffix").is_some() { " [Corrupted]" } else { "" };
             if let Some(id) = item.get("id").and_then(|v| v.as_str()) {
                 let item_name = resolver.get_item_name(id);
                 if let Some(type_name) = resolver.get_item_type_name(id) {
-                    writeln!(file, "  Item: {} ({})", item_name, type_name)?;
+                    writeln!(file, "  Item: {} ({}){}", item_name, type_name, corrupted_marker)?;
                 } else {
-                    writeln!(file, "  Item: {}", item_name)?;
+                    writeln!(file, "  Item: {}{}", item_name, corrupted_marker)?;
                 }
                 
                 let mut ir: Vec<u8> = Vec::new();
@@ -852,7 +1144,7 @@ fn write_equipment(file: &mut File, json: &Value, resolver: &Resolver) -> Result
                 affixes_to_write.push((sealed, " (Sealed)"));
             }
             if let Some(corrupted) = item.get("corruptedAffix") {
-                affixes_to_write.push((corrupted, " (Experimental)"));
+                affixes_to_write.push((corrupted, " (Corrupted)"));
             }
 
             if !affixes_to_write.is_empty() {
@@ -862,7 +1154,7 @@ fn write_equipment(file: &mut File, json: &Value, resolver: &Resolver) -> Result
                         let tier = affix.get("tier").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
                         let roll = affix.get("r").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
                         
-                        let detail = resolver.get_affix_detail(id_str, tier, roll);
+                        let detail = resolver.get_affix_detail(id_str, tier, roll, type_modifier);
                         if !detail.is_empty() {
                             writeln!(file, "    - {}{}", detail, tag)?;
                         } else {
@@ -889,6 +1181,7 @@ fn write_idols(file: &mut File, json: &Value, resolver: &Resolver) -> Result<()>
         
         for (idx, idol) in idols.iter().enumerate() {
             if let Some(id) = idol.get("id").and_then(|v| v.as_str()) {
+                let type_modifier = resolver.get_item_type_modifier(id);
                 let name = resolver.get_item_name(id);
                 if let Some(type_name) = resolver.get_item_type_name(id) {
                     writeln!(file, "Slot {}: {} ({})", idx + 1, name, type_name)?;
@@ -901,7 +1194,7 @@ fn write_idols(file: &mut File, json: &Value, resolver: &Resolver) -> Result<()>
                         if let Some(aff_id) = affix.get("id").and_then(|a| a.as_str()) {
                             let tier = affix.get("tier").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
                             let roll = affix.get("r").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-                            let detail = resolver.get_affix_detail(aff_id, tier, roll);
+                            let detail = resolver.get_affix_detail(aff_id, tier, roll, type_modifier);
                             if !detail.is_empty() {
                                 writeln!(file, "    - {}", detail)?;
                             } else {

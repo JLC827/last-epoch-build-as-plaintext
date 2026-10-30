@@ -2,14 +2,12 @@
 
 Extracts character stats, build, and equipment data from [Last Epoch Tools](https://www.lastepochtools.com/planner/) into plain text format. Useful for sharing, searching, or for LLM build analysis.
 
-## How to get your Build URL
+## Supported Build URLs
 
 1. Go to [https://www.lastepochtools.com/profile/](https://www.lastepochtools.com/profile/)
 2. Enter your account name. *(You can check your account name in the Social Panel: press `H` in game to access it)*
-3. Click **View Profile** and select the character you want to get build info for.
-4. Click **View in Build Planner**.
-5. On the left menu, click **Save/Share** and copy the generated link.
-6. Use this link as the URL in the Run command below!
+3. Open the character profile you want to scrape.
+4. Pass either the character profile URL or its Build Planner URL to the scraper. For a profile URL, the scraper follows **View in Build Planner** automatically.
 
 ## Quick Start
 
@@ -21,10 +19,10 @@ Extracts character stats, build, and equipment data from [Last Epoch Tools](http
    ```
    *(Keep this command prompt open)*
 3. **Run the Scraper**:
-   In the same command prompt from earlier, run the following command (replace `<YOUR_BUILD_URL>` with your pasted link):
+   In the same command prompt from earlier, run the following command with either a character profile URL or a planner URL:
    ```powershell
-   cargo run "<YOUR_BUILD_URL>"
-   # Example: cargo run "https://www.lastepochtools.com/planner/o3ZbjxKn"
+   cargo run "https://www.lastepochtools.com/profile/Bingus/character/Bongus"
+   # A planner URL also works: cargo run "https://www.lastepochtools.com/planner/QkYRnrdw"
    ```
 4. **Done**
    - The plain text build summary is automatically copied to your clipboard.
