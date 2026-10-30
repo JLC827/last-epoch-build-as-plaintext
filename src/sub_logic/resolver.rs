@@ -8,6 +8,7 @@ pub struct Resolver {
     translations: HashMap<String, String>,
     affix_map: HashMap<String, AffixData>,
     ability_map: HashMap<String, AbilityData>,
+    ailment_map: HashMap<u32, AilmentData>,
     item_map: HashMap<String, String>, // ID -> NameKey
     item_data_map: HashMap<String, ItemData>, // ID -> Implicits
     base_item_map: HashMap<(u32, u32), ItemData>, // (BaseType, SubType) -> Implicits
@@ -104,12 +105,20 @@ struct ImplicitData {
     max_value: f32,
 }
 
+#[derive(Debug)]
+struct AilmentData {
+    display_name: String,
+    display_name_key: Option<String>,
+    apply_prefix: i64,
+}
+
 impl Resolver {
     pub fn new() -> Result<Self> {
         let mut resolver = Resolver {
             translations: HashMap::new(),
             affix_map: HashMap::new(),
             ability_map: HashMap::new(),
+            ailment_map: HashMap::new(),
             item_map: HashMap::new(),
             item_data_map: HashMap::new(),
             base_item_map: HashMap::new(),
@@ -132,6 +141,7 @@ impl Resolver {
         resolver.load_items("debug_data/item_db.json")?;
         resolver.load_uniques("debug_data/item_db.json")?;
         resolver.load_abilities("debug_data/le_abilities.json")?;
+        resolver.load_ailments("debug_data/le_abilities.json")?;
 
         Ok(resolver)
     }
@@ -342,10 +352,12 @@ impl Resolver {
             let json: Value = serde_json::from_reader(reader)?;
             
             if let Some(obj) = json.as_object() {
-                if let Some(full) = obj.get("full").and_then(|v| v.as_object()) {
-                    for (k, v) in full {
-                        if let Some(s) = v.as_str() {
-                            self.translations.insert(k.clone(), s.to_string());
+                for ns in ["full", "static"] {
+                    if let Some(map) = obj.get(ns).and_then(|v| v.as_object()) {
+                        for (k, v) in map {
+                            if let Some(s) = v.as_str() {
+                                self.translations.insert(k.clone(), s.to_string());
+                            }
                         }
                     }
                 }
@@ -601,6 +613,24 @@ impl Resolver {
                             description_key,
                         });
                     }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn load_ailments(&mut self, path: &str) -> Result<()> {
+        let file = File::open(path).map_err(|e| anyhow::anyhow!("Failed to open {}: {}", path, e))?;
+        let reader = BufReader::new(file);
+        let json: Value = serde_json::from_reader(reader)?;
+        if let Some(list) = json.get("ailmentList").and_then(|v| v.as_object()) {
+            for (k, v) in list {
+                if let Ok(id) = k.parse::<u32>() {
+                    self.ailment_map.insert(id, AilmentData {
+                        display_name: v.get("displayName").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                        display_name_key: v.get("displayNameKey").and_then(|x| x.as_str()).map(|s| s.to_string()),
+                        apply_prefix: v.get("applyPrefix").and_then(|x| x.as_i64()).unwrap_or(0),
+                    });
                 }
             }
         }
@@ -948,28 +978,122 @@ impl Resolver {
     }
 
     pub fn get_property_name(&self, property_id: u32, tags: u32, special_tag: u32) -> String {
-        if property_id == 104 {
-            let base_prop = self.property_map.get(&property_id).map(|s| s.clone()).unwrap_or_else(|| "Unknown Property".to_string());
-            if special_tag == 3 {
-                return format!("Unique {}", base_prop);
-            } else if special_tag == 4 {
-                return format!("Class Specific Shard {}", base_prop);
-            } else if special_tag == 2 {
-                let subtype = self.get_base_type_name(tags).map(|s| s.clone()).unwrap_or_else(|| "Unknown".to_string());
-                return format!("{} Shard {}", subtype, base_prop);
-            } else if special_tag == 0 {
-                let subtype = self.get_base_type_name(tags).map(|s| s.clone()).unwrap_or_else(|| "Unknown".to_string());
-                return format!("{} {}", subtype, base_prop);
+        match property_id {
+            // AilmentChance: per-ailment name; phrasing follows the game's
+            // applyPrefix grouping (verified against in-game affix strings).
+            1 => self.ailment_chance_name(tags, special_tag),
+            // IncreasedAilmentDuration / IncreasedAilmentEffect
+            42 | 43 => {
+                let base = if property_id == 42 {
+                    "planner.stats.extra.increased_ailment_duration"
+                } else {
+                    "planner.stats.extra.increased_ailment_effect"
+                };
+                let key = if tags & 8192 != 0 { format!("{}.minion", base) } else { base.to_string() };
+                let tmpl = self.translations.get(&key).cloned().unwrap_or_else(|| "{ailment}".to_string());
+                let name = self.ailment_display_name(special_tag).unwrap_or_else(|| "Ailment".to_string());
+                tmpl.replace("{ailment}", &name)
+            }
+            // AilmentConversion: specialTag = converted-to, tags = converted-from
+            100 => {
+                let tmpl = self.translations.get("planner.stats.extra.ailment_chance_conversion")
+                    .cloned().unwrap_or_else(|| "{ailment1} Chance Converted to {ailment2} Chance".to_string());
+                tmpl
+                    .replace("{ailment1}", &self.ailment_display_name(special_tag).unwrap_or_else(|| "?".to_string()))
+                    .replace("{ailment2}", &self.ailment_display_name(tags).unwrap_or_else(|| "?".to_string()))
+            }
+            // IncreasedDropRate
+            104 => self.drop_rate_name(tags, special_tag),
+            98 => self.player_property_map.get(&tags).map(|s| s.clone()).unwrap_or_else(|| "Unknown Player Property".to_string()),
+            130 => {
+                let key = format!("Properties.Property_IdolAltar_{}_Name", tags);
+                self.translations.get(&key).map(|s| s.clone()).unwrap_or_else(|| "Unknown Idol Altar Property".to_string())
+            }
+            _ => self.property_map.get(&property_id).map(|s| s.clone()).unwrap_or_else(|| "Unknown Property".to_string()),
+        }
+    }
+
+    fn ailment_display_name(&self, special_tag: u32) -> Option<String> {
+        self.ailment_map.get(&special_tag).map(|a| {
+            a.display_name_key.as_ref()
+                .and_then(|k| self.translations.get(k))
+                .cloned()
+                .unwrap_or_else(|| a.display_name.clone())
+        })
+    }
+
+    /// Chance-to-apply-ailment mod name, matching the game's tooltip phrasing.
+    /// The wording varies per ailment (applyPrefix): 0 = "Chance to X", 1 =
+    /// "Chance to apply X", 2 = "Chance to apply a X", 3 = "Chance to Inflict X".
+    fn ailment_chance_name(&self, tags: u32, special_tag: u32) -> String {
+        let data = match self.ailment_map.get(&special_tag) {
+            Some(d) => d,
+            None => return self.property_map.get(&1).cloned().unwrap_or_else(|| "Ailment Chance".to_string()),
+        };
+        let name = self.ailment_display_name(special_tag).unwrap_or_else(|| "Ailment".to_string());
+        let base = match data.apply_prefix {
+            1 => format!("Chance to apply {}", name),
+            2 => format!("Chance to apply a {}", name),
+            3 => format!("Chance to Inflict {}", name),
+            _ => format!("Chance to {}", name),
+        };
+        // The hit-condition suffix comes from the site's template family
+        // ("...ailment_chance[.tag chain]"); templates vary the part after
+        // {ailment} (" on Hit", " on Melee Hit", " on Hit with Fire Skills"...).
+        let key = self.ailment_template_key(tags);
+        let suffix = self.translations.get(&key)
+            .and_then(|t| t.split_once("{ailment}").map(|(_, s)| s.to_string()));
+        match suffix {
+            Some(s) => format!("{}{}", base, s),
+            None => format!("{} on Hit", base),
+        }
+    }
+
+    /// Map the mod's tag bits to the site's ailment-chance template key.
+    fn ailment_template_key(&self, tags: u32) -> String {
+        const IGNORED: u32 = 16384 | 262144 | 524288 | 65536 | 1048576 | 2097152 | 4194304;
+        let bits = tags & !IGNORED;
+        let pairs: [(u32, &str); 14] = [
+            (8192, "minion"), (33554432, "ailment"),
+            (8, "fire"), (4, "cold"), (2, "lightning"), (64, "poison"), (32, "necrotic"),
+            (16, "void"), (1, "physical"), (128, "elemental"),
+            (512, "melee"), (256, "spell"), (1024, "throwing"), (2048, "bow"),
+        ];
+        let mut chain: Vec<&str> = Vec::new();
+        for (bit, name) in pairs {
+            if bits & bit != 0 {
+                chain.push(name);
             }
         }
-        
-        if property_id == 98 {
-            self.player_property_map.get(&tags).map(|s| s.clone()).unwrap_or_else(|| "Unknown Player Property".to_string())
-        } else if property_id == 130 {
-            let key = format!("Properties.Property_IdolAltar_{}_Name", tags);
-            self.translations.get(&key).map(|s| s.clone()).unwrap_or_else(|| "Unknown Idol Altar Property".to_string())
-        } else {
-            self.property_map.get(&property_id).map(|s| s.clone()).unwrap_or_else(|| "Unknown Property".to_string())
+        let base = "planner.stats.extra.ailment_chance".to_string();
+        if chain.is_empty() {
+            return base;
+        }
+        let mut key = format!("{}.{}", base, chain.join("."));
+        while !self.translations.contains_key(&key) && chain.len() > 1 {
+            chain.pop();
+            key = format!("{}.{}", base, chain.join("."));
+        }
+        if self.translations.contains_key(&key) { key } else { base }
+    }
+
+    fn drop_rate_name(&self, tags: u32, special_tag: u32) -> String {
+        let t = |k: &str| self.translations.get(k).cloned().unwrap_or_else(|| k.to_string());
+        let item_type = |id: u32| self.get_base_type_name(id).map(|s| s.clone()).unwrap_or_else(|| "Unknown".to_string());
+        match special_tag {
+            0 => t("item_db.item_card.property.drop_rate.equipment_type").replace("{itemType}", &item_type(tags)),
+            1 => match tags { 2 => t("item_db.item_card.property.drop_rate.glyph"), _ => t("item_db.item_card.property.drop_rate.rune") },
+            2 => t("item_db.item_card.property.drop_rate.shard.equipment_type").replace("{itemType}", &item_type(tags)),
+            3 => match tags { 1 => t("item_db.item_card.property.drop_rate.gold"), _ => t("item_db.item_card.property.drop_rate.unique") },
+            4 => match tags {
+                1 => t("item_db.item_card.property.drop_rate.shard.suffix"),
+                2 => t("item_db.item_card.property.drop_rate.shard.class_specific"),
+                3 => t("item_db.item_card.property.drop_rate.shard.set_affix"),
+                4 => t("item_db.item_card.property.drop_rate.shard.ailment"),
+                5 => t("item_db.item_card.property.drop_rate.shard.skill_level"),
+                _ => t("item_db.item_card.property.drop_rate.shard.prefix"),
+            },
+            _ => t("item_db.item_card.property.drop_rate.equipment_type").replace("{itemType}", &item_type(tags)),
         }
     }
 
