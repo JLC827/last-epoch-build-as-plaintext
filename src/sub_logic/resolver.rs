@@ -30,6 +30,7 @@ struct UniqueData {
     sub_type_id: u32,
     mods: Vec<UniqueMod>,
     tooltip_descriptions: Vec<String>,
+    is_pre_corrupted: bool,
 }
 
 #[derive(Debug)]
@@ -51,6 +52,7 @@ struct AffixData {
     tiers: Vec<TierData>,
     fallback_name: Option<String>,
     std_mod: f32,
+    special_affix_type: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -90,6 +92,7 @@ struct AbilityData {
 struct ItemData {
     base_type_id: u32,
     implicits: Vec<ImplicitData>,
+    is_corrupted_subtype: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -397,7 +400,8 @@ impl Resolver {
                                                 implicits.push(ImplicitData { property_id: prop, tags: tag_val, special_tag, value: val, max_value: max_val });
                                             }
                                         }
-                                        let item_data = ItemData { implicits, base_type_id };
+                                        let is_corrupted_subtype = sub_item_val.get("isCorruptedSubtype").and_then(|v| v.as_u64()).unwrap_or(0) > 0;
+                                        let item_data = ItemData { implicits, base_type_id, is_corrupted_subtype };
                                         self.item_data_map.insert(id.to_string(), item_data.clone());
                                         
                                         let sub_type_id = id.parse::<u32>().unwrap_or(0);
@@ -422,7 +426,8 @@ impl Resolver {
                                                 implicits.push(ImplicitData { property_id: prop, tags: tag_val, special_tag, value: val, max_value: max_val });
                                             }
                                         }
-                                        let item_data = ItemData { implicits, base_type_id };
+                                        let is_corrupted_subtype = sub_item_val.get("isCorruptedSubtype").and_then(|v| v.as_u64()).unwrap_or(0) > 0;
+                                        let item_data = ItemData { implicits, base_type_id, is_corrupted_subtype };
                                         self.item_data_map.insert(id.to_string(), item_data.clone());
                                         
                                         let sub_type_id = id.parse::<u32>().unwrap_or(0);
@@ -493,6 +498,7 @@ impl Resolver {
                             sub_type_id,
                             mods,
                             tooltip_descriptions,
+                            is_pre_corrupted: value.get("isPreCorrupted").and_then(|v| v.as_u64()).unwrap_or(0) > 0,
                         });
                     }
                 }
@@ -558,6 +564,7 @@ impl Resolver {
                                     tiers,
                                     fallback_name: fallback,
                                     std_mod,
+                                    special_affix_type: obj.get("specialAffixType").and_then(|v| v.as_i64()).unwrap_or(0),
                                 });
                             }
                         }
@@ -617,6 +624,57 @@ impl Resolver {
             .and_then(|bt| self.base_type_modifier_map.get(&bt))
             .copied()
             .unwrap_or(0.0)
+    }
+
+    /// Whether an affix definition belongs to the Corrupted affix category
+    /// (specialAffixType 6), i.e. it can only come from item corruption.
+    pub fn is_corrupted_affix(&self, id: &str) -> bool {
+        self.affix_map.get(id).map(|a| a.special_affix_type == 6).unwrap_or(false)
+    }
+
+    /// Whether an equipped item is corrupted (in-game "Corrupted - Unmodifiable").
+    /// Mirrors the site's own isCorrupted predicate (profile_script.js) plus the
+    /// save-side flags the site's JS does not yet consume: `tradeable: 0` marks
+    /// corrupted items in the game save (verified against in-game tooltips), and
+    /// a nonzero `corrupted` value marks the same. `corrupted: 0` is an explicit
+    /// "not corrupted" record and must not trigger the marker.
+    pub fn is_corrupted_item(&self, item_id: &str, item: &serde_json::Value) -> bool {
+        // Game-save payload markers.
+        if item.get("corruptedAffix").is_some() {
+            return true;
+        }
+        if item.get("tradeable").and_then(|v| v.as_i64()) == Some(0) {
+            return true;
+        }
+        if item.get("corrupted").and_then(|v| v.as_i64()).map(|v| v != 0) == Some(true) {
+            return true;
+        }
+        // Corrupted-category affixes on any affix slot.
+        if let Some(arr) = item.get("affixes").and_then(|v| v.as_array()) {
+            for a in arr {
+                if a.get("id").and_then(|v| v.as_str()).map(|id| self.is_corrupted_affix(id)) == Some(true) {
+                    return true;
+                }
+            }
+        }
+        for key in ["sealedAffix", "primordialAffix", "corruptedAffix"] {
+            if item.get(key).and_then(|v| v.get("id")).and_then(|v| v.as_str())
+                .map(|id| self.is_corrupted_affix(id)) == Some(true) {
+                return true;
+            }
+        }
+        // Item-DB flags: pre-corrupted uniques, corruption-only subtypes, idol altars.
+        if let Some(u) = self.unique_data_map.get(item_id) {
+            if u.is_pre_corrupted || u.base_type_id == 41 {
+                return true;
+            }
+        }
+        if let Some(d) = self.item_data_map.get(item_id) {
+            if d.is_corrupted_subtype || d.base_type_id == 41 {
+                return true;
+            }
+        }
+        false
     }
 
     fn is_percentage_mod(&self, prop_mod: &PropMod, raw_min: f32) -> bool {

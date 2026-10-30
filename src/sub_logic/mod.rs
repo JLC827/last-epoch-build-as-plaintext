@@ -1098,7 +1098,10 @@ fn write_equipment(file: &mut File, json: &Value, resolver: &Resolver) -> Result
             let type_modifier = item.get("id").and_then(|v| v.as_str())
                 .map(|id| resolver.get_item_type_modifier(id))
                 .unwrap_or(0.0);
-            let corrupted_marker = if item.get("corruptedAffix").is_some() { " [Corrupted]" } else { "" };
+            let corrupted_marker = if item.get("id").and_then(|v| v.as_str())
+                .map(|id| resolver.is_corrupted_item(id, item))
+                .unwrap_or_else(|| item.get("corruptedAffix").is_some())
+            { " [Corrupted]" } else { "" };
             if let Some(id) = item.get("id").and_then(|v| v.as_str()) {
                 let item_name = resolver.get_item_name(id);
                 if let Some(type_name) = resolver.get_item_type_name(id) {
@@ -1148,6 +1151,7 @@ fn write_equipment(file: &mut File, json: &Value, resolver: &Resolver) -> Result
                     if let Some(id_str) = affix.get("id").and_then(|v| v.as_str()) {
                         let tier = affix.get("tier").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
                         let roll = affix.get("r").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                        let tag = if tag.is_empty() && resolver.is_corrupted_affix(id_str) { " (Corrupted)" } else { *tag };
                         
                         let detail = resolver.get_affix_detail(id_str, tier, roll, type_modifier);
                         if !detail.is_empty() {
